@@ -221,3 +221,25 @@ def county_user_list():
         "perPage": per_page,
         "list": users,
     })
+
+
+@county_bp.route("/trend", methods=["POST"])
+def county_trend():
+    req_data = _json_body()
+    begin_time, end_time, err = _require_time_range(req_data)
+    if err:
+        return err
+
+    try:
+        points = county_repository.trend_by_time(
+            begin_time=begin_time,
+            end_time=end_time,
+            rdt_county_id=_optional_str(req_data.get("countyId")),
+        )
+    except ValueError as e:
+        return error(str(e), 400)
+    except Exception:
+        current_app.logger.exception("Failed to query trend data")
+        return error("Failed to query trend data", 500)
+
+    return success({"points": points})

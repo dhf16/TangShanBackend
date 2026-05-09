@@ -1,4 +1,5 @@
 import re
+from datetime import datetime, timedelta
 
 import pymysql
 from dbutils.pooled_db import PooledDB
@@ -12,6 +13,35 @@ _POOL_DEFAULTS = {
     "maxcached": 8,
     "maxconnections": 20,
 }
+
+_DATETIME_PARSE = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d")
+_NUM_SEGMENTS = 6
+
+
+def _parse_dt(value):
+    for fmt in _DATETIME_PARSE:
+        try:
+            return datetime.strptime(value, fmt)
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def _build_time_segments(begin_time, end_time, num_segments=_NUM_SEGMENTS):
+    dt_begin = _parse_dt(begin_time)
+    dt_end = _parse_dt(end_time)
+    if dt_begin is None or dt_end is None:
+        raise ValueError("Invalid datetime format")
+    total = (dt_end - dt_begin).total_seconds()
+    seg_seconds = total / num_segments
+    boundaries = []
+    labels = []
+    for i in range(num_segments):
+        seg_start = dt_begin + timedelta(seconds=seg_seconds * i)
+        seg_end = dt_begin + timedelta(seconds=seg_seconds * (i + 1))
+        boundaries.append((seg_start, seg_end))
+        labels.append(seg_end.strftime("%Y-%m-%d %H:%M:%S"))
+    return boundaries, labels
 
 
 class CountyRepository:
@@ -274,6 +304,63 @@ class CountyRepository:
             row["isSensitiveUser"] = bool(row.get("isSensitiveUser"))
 
         return rows, total
+
+    def trend_by_time(self, begin_time, end_time, rdt_county_id=None):
+        boundaries, labels = _build_time_segments(begin_time, end_time)
+
+        whens = []
+        params = {
+            "filter_begin_time": begin_time,
+            "filter_end_time": end_time,
+        }
+        for i, (seg_start, seg_end) in enumerate(boundaries, 1):
+            op = "<=" if i == len(boundaries) else "<"
+            whens.append(
+                f"WHEN `begin_time` >= :seg_start_{i} AND `begin_time` {op} :seg_end_{i} "
+                f"THEN :label_{i}"
+            )
+            params[f"seg_start_{i}"] = seg_start.strftime("%Y-%m-%d %H:%M:%S")
+            params[f"seg_end_{i}"] = seg_end.strftime("%Y-%m-%d %H:%M:%S")
+            params[f"label_{i}"] = labels[i - 1]
+
+        case_sql = "CASE " + " ".join(whens) + " END"
+
+        where_parts = [
+            "`begin_time` >= :filter_begin_time",
+            "`begin_time` <= :filter_end_time",
+        ]
+        if rdt_county_id:
+            where_parts.append("rdt_county_id = :rdt_county_id")
+            params["rdt_county_id"] = rdt_county_id
+        where_sql = "WHERE " + " AND ".join(where_parts)
+
+        tbl = self.user_score_table
+        sql = f"""
+        SELECT
+          {case_sql} AS timePoint,
+          SUM(CASE WHEN is_key_user = 1 THEN 1 ELSE 0 END) AS keyUsers,
+          SUM(CASE WHEN is_sensitive_user = 1 THEN 1 ELSE 0 END) AS sensitiveUsers
+        FROM `{tbl}`
+        {where_sql}
+        GROUP BY timePoint
+        ORDER BY timePoint ASC
+        """
+        rows = self._fetch_all(sql, params)
+
+        result_map = {r["timePoint"]: r for r in rows}
+        points = []
+        for label in labels:
+            if label in result_map:
+                row = result_map[label]
+                points.append({
+                    "timePoint": label,
+                    "keyUsers": int(row.get("keyUsers") or 0),
+                    "sensitiveUsers": int(row.get("sensitiveUsers") or 0),
+                })
+            else:
+                points.append({"timePoint": label, "keyUsers": 0, "sensitiveUsers": 0})
+
+        return points
 
     def _build_where_clause(
         self,
