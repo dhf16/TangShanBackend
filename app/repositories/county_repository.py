@@ -362,6 +362,64 @@ class CountyRepository:
 
         return points
 
+    def bar_chart_by_county(
+        self, begin_time=None, end_time=None,
+        snapshot_date=None, snapshot_start_date=None, snapshot_end_date=None,
+    ):
+        where_parts, params = self._time_filters(
+            begin_time, end_time, snapshot_date, snapshot_start_date, snapshot_end_date
+        )
+        where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+        sql = f"""
+        SELECT
+          IFNULL(rdt_county_id, '') AS countyId,
+          IFNULL(rdt_county_name, '') AS countyName,
+          SUM(CASE WHEN is_key_user = 1 THEN 1 ELSE 0 END) AS keyUsers,
+          SUM(CASE WHEN is_sensitive_user = 1 THEN 1 ELSE 0 END) AS sensitiveUsers
+        FROM `{self.user_score_table}`
+        {where_sql}
+        GROUP BY rdt_county_id, rdt_county_name
+        ORDER BY (SUM(CASE WHEN is_key_user = 1 THEN 1 ELSE 0 END)
+                + SUM(CASE WHEN is_sensitive_user = 1 THEN 1 ELSE 0 END)) DESC
+        """
+        rows = self._fetch_all(sql, params)
+        for row in rows:
+            for key in ("keyUsers", "sensitiveUsers"):
+                row[key] = int(row.get(key) or 0)
+        return rows
+
+    def bar_chart_by_maint_group(
+        self, county_id, begin_time=None, end_time=None,
+        snapshot_date=None, snapshot_start_date=None, snapshot_end_date=None,
+    ):
+        where_parts = ["rdt_county_id = :county_id"]
+        params = {"county_id": county_id}
+        extra_parts, extra_params = self._time_filters(
+            begin_time, end_time, snapshot_date, snapshot_start_date, snapshot_end_date
+        )
+        where_parts.extend(extra_parts)
+        params.update(extra_params)
+        where_sql = "WHERE " + " AND ".join(where_parts)
+
+        sql = f"""
+        SELECT
+          IFNULL(rdt_maint_group_id, '') AS maintGroupId,
+          IFNULL(rdt_maint_group_name, '') AS maintGroupName,
+          SUM(CASE WHEN is_key_user = 1 THEN 1 ELSE 0 END) AS keyUsers,
+          SUM(CASE WHEN is_sensitive_user = 1 THEN 1 ELSE 0 END) AS sensitiveUsers
+        FROM `{self.user_score_table}`
+        {where_sql}
+        GROUP BY rdt_maint_group_id, rdt_maint_group_name
+        ORDER BY (SUM(CASE WHEN is_key_user = 1 THEN 1 ELSE 0 END)
+                + SUM(CASE WHEN is_sensitive_user = 1 THEN 1 ELSE 0 END)) DESC
+        """
+        rows = self._fetch_all(sql, params)
+        for row in rows:
+            for key in ("keyUsers", "sensitiveUsers"):
+                row[key] = int(row.get(key) or 0)
+        return rows
+
     def _build_where_clause(
         self,
         user_level=None,

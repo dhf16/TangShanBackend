@@ -532,6 +532,126 @@ POST /api/county/trend
 
 ---
 
+## 6. 区县百分比分布
+
+查询指定时间范围内各区县或运维班组的重点用户和敏感用户分布，用于渲染柱状图。有两种用法：
+- **不传 countyId**：返回各区县的分布，X 轴为区县名称
+- **传 countyId**：返回该区县下各运维班组的分布，X 轴为班组名称
+
+```
+POST /api/county/bar-chart
+```
+
+### 请求参数
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| beginTime | string | **是** | 查询起始时间，格式 `YYYY-MM-DD` 或 `YYYY-MM-DD HH:mm:ss` |
+| endTime | string | **是** | 查询截止时间，格式同上 |
+| countyId | string | 否 | 区县 ID，不传则按区县分组；传入则按该区县下的运维班组分组 |
+
+### 请求示例
+
+查询所有区县分布：
+
+```json
+{
+  "beginTime": "2025-01-01 00:00:00",
+  "endTime": "2026-04-30 23:59:59"
+}
+```
+
+查询指定区县的运维班组分布：
+
+```json
+{
+  "beginTime": "2025-01-01 00:00:00",
+  "endTime": "2026-04-30 23:59:59",
+  "countyId": "130203"
+}
+```
+
+### 响应示例（不传 countyId）
+
+```json
+{
+  "code": 0,
+  "success": true,
+  "message": "ok",
+  "data": {
+    "total": 550,
+    "list": [
+      {
+        "name": "路北区",
+        "id": "130202",
+        "keyUsers": 80,
+        "sensitiveUsers": 100,
+        "keyPercentage": 14.5,
+        "sensitivePercentage": 18.2
+      },
+      {
+        "name": "路南区",
+        "id": "130203",
+        "keyUsers": 60,
+        "sensitiveUsers": 90,
+        "keyPercentage": 10.9,
+        "sensitivePercentage": 16.4
+      }
+    ]
+  },
+  "timestamp": "2026-05-09T10:00:00+08:00"
+}
+```
+
+### 响应示例（传 countyId）
+
+```json
+{
+  "code": 0,
+  "success": true,
+  "message": "ok",
+  "data": {
+    "total": 180,
+    "list": [
+      {
+        "name": "运维一班",
+        "id": "MG001",
+        "keyUsers": 30,
+        "sensitiveUsers": 40,
+        "keyPercentage": 16.7,
+        "sensitivePercentage": 22.2
+      },
+      {
+        "name": "运维二班",
+        "id": "MG002",
+        "keyUsers": 20,
+        "sensitiveUsers": 25,
+        "keyPercentage": 11.1,
+        "sensitivePercentage": 13.9
+      }
+    ]
+  },
+  "timestamp": "2026-05-09T10:00:00+08:00"
+}
+```
+
+### 响应字段说明
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| data.total | int | 所有分组的 keyUsers + sensitiveUsers 总和 |
+| data.list | array | 分布数据，按 keyUsers + sensitiveUsers 降序 |
+| data.list[].name | string | 分组名称（不传 countyId 时为区县名称，传 countyId 时为运维班组名称） |
+| data.list[].id | string | 分组 ID（区县 ID 或运维班组 ID） |
+| data.list[].keyUsers | int | 该分组重点用户数量 |
+| data.list[].sensitiveUsers | int | 该分组敏感用户数量 |
+| data.list[].keyPercentage | float | 该分组重点用户占总数的百分比，保留一位小数 |
+| data.list[].sensitivePercentage | float | 该分组敏感用户占总数的百分比，保留一位小数 |
+
+> **注意**：一个用户可以同时是重点用户和敏感用户，因此 keyUsers 和 sensitiveUsers 可能存在重叠。keyPercentage + sensitivePercentage 表示该分组在总数中的占比。
+
+---
+
 ## 参数校验规则
 
 | 场景 | 错误信息 | HTTP 状态码 |

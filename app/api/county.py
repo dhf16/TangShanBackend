@@ -243,3 +243,46 @@ def county_trend():
         return error("Failed to query trend data", 500)
 
     return success({"points": points})
+
+
+@county_bp.route("/bar-chart", methods=["POST"])
+def county_bar_chart():
+    req_data = _json_body()
+    begin_time, end_time, err = _require_time_range(req_data)
+    if err:
+        return err
+
+    county_id = _optional_str(req_data.get("countyId"))
+    common = {
+        "begin_time": begin_time,
+        "end_time": end_time,
+        **_snapshot_filters(req_data),
+    }
+
+    try:
+        if county_id:
+            rows = county_repository.bar_chart_by_maint_group(
+                county_id=county_id, **common
+            )
+        else:
+            rows = county_repository.bar_chart_by_county(**common)
+
+        total = sum(r["keyUsers"] + r["sensitiveUsers"] for r in rows)
+
+        items = []
+        for r in rows:
+            name = r.get("countyName") or r.get("maintGroupName", "")
+            item_id = r.get("countyId") or r.get("maintGroupId", "")
+            items.append({
+                "name": name,
+                "id": item_id,
+                "keyUsers": r["keyUsers"],
+                "sensitiveUsers": r["sensitiveUsers"],
+                "keyPercentage": round(r["keyUsers"] / total * 100, 1) if total else 0,
+                "sensitivePercentage": round(r["sensitiveUsers"] / total * 100, 1) if total else 0,
+            })
+    except Exception:
+        current_app.logger.exception("Failed to query bar chart data")
+        return error("Failed to query bar chart data", 500)
+
+    return success({"total": total, "list": items})
