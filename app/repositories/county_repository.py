@@ -123,10 +123,16 @@ class CountyRepository:
         snapshot_date=None,
         snapshot_start_date=None,
         snapshot_end_date=None,
+        city_id=None,
     ):
         where_parts, params = self._time_filters(
             begin_time, end_time, snapshot_date, snapshot_start_date, snapshot_end_date
         )
+        if city_id:
+            where_parts.append(
+                "rdt_county_id IN (SELECT county_id FROM county WHERE city_id = :city_id)"
+            )
+            params["city_id"] = city_id
         where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
         sql = f"""
@@ -258,6 +264,7 @@ class CountyRepository:
         end_time=None,
         sort_by="updated_at",
         sort_order="desc",
+        outage_count_filter=None,
     ):
         allowed_sort = {
             "id", "created_at", "updated_at",
@@ -278,9 +285,48 @@ class CountyRepository:
         )
 
         tbl = self.user_score_table
+
+        if outage_count_filter:
+            sub_where, sub_params = self._build_where_clause(
+                user_level=user_level,
+                rdt_county_id=rdt_county_id,
+                snapshot_date=snapshot_date,
+                snapshot_start_date=snapshot_start_date,
+                snapshot_end_date=snapshot_end_date,
+                begin_time=begin_time,
+                end_time=end_time,
+            )
+            if outage_count_filter == "3+":
+                having = "HAVING COUNT(*) >= 3"
+            else:
+                having = "HAVING COUNT(*) = :_outage_cnt"
+                sub_params["_outage_cnt"] = int(outage_count_filter)
+            sub_sql = (
+                f"SELECT cons_no, COUNT(*) AS cnt FROM `{tbl}` {sub_where} "
+                f"GROUP BY cons_no {having}"
+            )
+            cons_no_rows = self._fetch_all(sub_sql, sub_params)
+            if not cons_no_rows:
+                return [], 0
+
+            in_ph = []
+            for i, r in enumerate(cons_no_rows):
+                key = f"_oc_{i}"
+                in_ph.append(f":{key}")
+                params[key] = r["cons_no"]
+            where_sql += f" AND cons_no IN ({', '.join(in_ph)})"
+
+            # 无 keyword 时直接从子查询结果算 total，省掉 COUNT 查询
+            if not keyword:
+                total = sum(int(r.get("cnt", 0)) for r in cons_no_rows)
+            else:
+                count_sql = f"SELECT COUNT(*) AS total FROM `{tbl}` {where_sql}"
+                total = int(self._fetch_one(count_sql, params).get("total", 0))
+        else:
+            count_sql = f"SELECT COUNT(*) AS total FROM `{tbl}` {where_sql}"
+            total = int(self._fetch_one(count_sql, params).get("total", 0))
+
         offset = (page - 1) * per_page
-        count_sql = f"SELECT COUNT(*) AS total FROM `{tbl}` {where_sql}"
-        total = int(self._fetch_one(count_sql, params).get("total", 0))
 
         list_params = {**params, "_limit": per_page, "_offset": offset}
         list_sql = f"""
@@ -362,32 +408,193 @@ class CountyRepository:
 
         return points
 
-    def bar_chart_by_county(
+    def equipment_impact_stats(
         self, begin_time=None, end_time=None,
+        city_id=None, county_id=None,
         snapshot_date=None, snapshot_start_date=None, snapshot_end_date=None,
     ):
         where_parts, params = self._time_filters(
             begin_time, end_time, snapshot_date, snapshot_start_date, snapshot_end_date
         )
+        if city_id:
+            where_parts.append(
+                "rdt_county_id IN (SELECT county_id FROM county WHERE city_id = :city_id)"
+            )
+            params["city_id"] = city_id
+        if county_id:
+            where_parts.append("rdt_county_id = :county_id")
+            params["county_id"] = county_id
         where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
+        tbl = self.user_score_table
+
+        stats_sql = f"""
+        SELECT
+          COUNT(DISTINCT equipment_id) AS equipmentCount,
+          COUNT(DISTINCT CASE WHEN is_sensitive_user = 1 THEN cons_no END) AS sensitiveUsers,
+          COUNT(DISTINCT CASE WHEN is_key_user = 1 THEN cons_no END) AS keyUsers
+        FROM `{tbl}`
+        {where_sql}
+        """
+        stats = self._fetch_one(stats_sql, params)
+        total_equip = int(stats.get("equipmentCount") or 0)
+
+        high_impact_sql = f"""
+        SELECT COUNT(*) AS highImpactCount FROM (
+          SELECT equipment_id
+          FROM `{tbl}`
+          {where_sql}
+            AND is_key_user = 1
+          GROUP BY equipment_id
+          HAVING COUNT(DISTINCT cons_no) >= 20
+        ) sub
+        """
+        high_impact = self._fetch_one(high_impact_sql, params)
+        high_count = int(high_impact.get("highImpactCount") or 0)
+
+        return {
+            "equipmentCount": total_equip,
+            "sensitiveUsers": int(stats.get("sensitiveUsers") or 0),
+            "keyUsers": int(stats.get("keyUsers") or 0),
+            "highImpactEquipmentCount": high_count,
+            "highImpactPercentage": round(high_count / total_equip * 100, 1) if total_equip else 0,
+        }
+
+    def equipment_impact_list(
+        self, begin_time=None, end_time=None,
+        city_id=None, county_id=None, top=None,
+        snapshot_date=None, snapshot_start_date=None, snapshot_end_date=None,
+    ):
+        where_parts, params = self._time_filters(
+            begin_time, end_time, snapshot_date, snapshot_start_date, snapshot_end_date
+        )
+        if city_id:
+            where_parts.append("rdt_city_id = :city_id")
+            params["city_id"] = city_id
+        if county_id:
+            where_parts.append("rdt_county_id = :county_id")
+            params["county_id"] = county_id
+        where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+        limit_sql = ""
+        if top:
+            limit_sql = f"LIMIT :_top"
+            params["_top"] = int(top)
+
+        tbl = self.user_score_table
         sql = f"""
         SELECT
-          IFNULL(rdt_county_id, '') AS countyId,
-          IFNULL(rdt_county_name, '') AS countyName,
-          SUM(CASE WHEN is_key_user = 1 THEN 1 ELSE 0 END) AS keyUsers,
-          SUM(CASE WHEN is_sensitive_user = 1 THEN 1 ELSE 0 END) AS sensitiveUsers
-        FROM `{self.user_score_table}`
+          IFNULL(equipment_id, '') AS equipmentId,
+          IFNULL(equipment_name, '') AS equipmentName,
+          COUNT(DISTINCT CASE WHEN is_key_user = 1 THEN cons_no END) AS keyUsers,
+          COUNT(DISTINCT CASE WHEN is_sensitive_user = 1 THEN cons_no END) AS sensitiveUsers,
+          COUNT(DISTINCT outage_number) AS outageCount
+        FROM `{tbl}`
         {where_sql}
-        GROUP BY rdt_county_id, rdt_county_name
-        ORDER BY (SUM(CASE WHEN is_key_user = 1 THEN 1 ELSE 0 END)
-                + SUM(CASE WHEN is_sensitive_user = 1 THEN 1 ELSE 0 END)) DESC
+        GROUP BY equipment_id, equipment_name
+        ORDER BY keyUsers DESC, outageCount DESC
+        {limit_sql}
         """
         rows = self._fetch_all(sql, params)
         for row in rows:
-            for key in ("keyUsers", "sensitiveUsers"):
+            for key in ("keyUsers", "sensitiveUsers", "outageCount"):
                 row[key] = int(row.get(key) or 0)
         return rows
+
+    def equipment_impact_page(
+        self, page, per_page,
+        begin_time=None, end_time=None,
+        city_id=None, county_id=None,
+        snapshot_date=None, snapshot_start_date=None, snapshot_end_date=None,
+    ):
+        where_parts, params = self._time_filters(
+            begin_time, end_time, snapshot_date, snapshot_start_date, snapshot_end_date
+        )
+        if city_id:
+            where_parts.append("rdt_city_id = :city_id")
+            params["city_id"] = city_id
+        if county_id:
+            where_parts.append("rdt_county_id = :county_id")
+            params["county_id"] = county_id
+        where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+        tbl = self.user_score_table
+
+        count_sql = f"""
+        SELECT COUNT(*) AS total FROM (
+          SELECT equipment_id FROM `{tbl}` {where_sql} GROUP BY equipment_id
+        ) sub
+        """
+        total = int(self._fetch_one(count_sql, params).get("total", 0))
+
+        offset = (page - 1) * per_page
+        list_params = {**params, "_limit": per_page, "_offset": offset}
+        list_sql = f"""
+        SELECT
+          IFNULL(equipment_id, '') AS equipmentId,
+          IFNULL(equipment_name, '') AS equipmentName,
+          COUNT(DISTINCT CASE WHEN is_key_user = 1 THEN cons_no END) AS keyUsers,
+          COUNT(DISTINCT CASE WHEN is_sensitive_user = 1 THEN cons_no END) AS sensitiveUsers
+        FROM `{tbl}`
+        {where_sql}
+        GROUP BY equipment_id, equipment_name
+        ORDER BY keyUsers DESC
+        LIMIT :_limit OFFSET :_offset
+        """
+        rows = self._fetch_all(list_sql, list_params)
+        for row in rows:
+            for key in ("keyUsers", "sensitiveUsers"):
+                row[key] = int(row.get(key) or 0)
+        return rows, total
+
+    def equipment_detail(self, equipment_id):
+        tbl = self.user_score_table
+
+        stats_sql = f"""
+        SELECT
+          IFNULL(equipment_id, '') AS equipmentId,
+          IFNULL(equipment_name, '') AS equipmentName,
+          IFNULL(equipment_type, '') AS equipmentType,
+          COUNT(DISTINCT CASE WHEN is_key_user = 1 THEN cons_no END) AS keyUserCount,
+          COUNT(DISTINCT CASE WHEN is_sensitive_user = 1 THEN cons_no END) AS sensitiveUserCount
+        FROM `{tbl}`
+        WHERE equipment_id = :equipment_id
+        GROUP BY equipment_id, equipment_name, equipment_type
+        """
+        stats = self._fetch_one(stats_sql, {"equipment_id": equipment_id})
+        if not stats or not stats.get("equipmentId"):
+            return None
+
+        user_fields = """
+        SELECT DISTINCT
+          cons_no AS consNo,
+          IFNULL(cons_name, '') AS consName,
+          IFNULL(trade_name, '') AS tradeName,
+          IFNULL(rdt_county_name, '') AS countyName,
+          IFNULL(cons_addr, '') AS consAddr,
+          IFNULL(cons_type_name, '') AS consTypeName,
+          IFNULL(volt_level, '') AS voltLevel
+        """
+        key_sql = (
+            f"{user_fields} FROM `{tbl}`"
+            f" WHERE equipment_id = :equipment_id AND is_key_user = 1"
+        )
+        sensitive_sql = (
+            f"{user_fields} FROM `{tbl}`"
+            f" WHERE equipment_id = :equipment_id AND is_sensitive_user = 1"
+        )
+        key_users = self._fetch_all(key_sql, {"equipment_id": equipment_id})
+        sensitive_users = self._fetch_all(sensitive_sql, {"equipment_id": equipment_id})
+
+        return {
+            "equipmentId": stats["equipmentId"],
+            "equipmentName": stats["equipmentName"],
+            "equipmentType": stats.get("equipmentType", ""),
+            "keyUserCount": int(stats.get("keyUserCount") or 0),
+            "sensitiveUserCount": int(stats.get("sensitiveUserCount") or 0),
+            "keyUsers": key_users,
+            "sensitiveUsers": sensitive_users,
+        }
 
     def bar_chart_by_maint_group(
         self, county_id, begin_time=None, end_time=None,
@@ -418,6 +625,50 @@ class CountyRepository:
         for row in rows:
             for key in ("keyUsers", "sensitiveUsers"):
                 row[key] = int(row.get(key) or 0)
+        return rows
+
+    def outage_freq_distribution(
+        self, user_level, begin_time=None, end_time=None,
+        rdt_county_id=None, snapshot_date=None,
+        snapshot_start_date=None, snapshot_end_date=None,
+    ):
+        if user_level == "key":
+            user_filter = "is_key_user = 1"
+        else:
+            user_filter = "is_sensitive_user = 1"
+
+        where_parts = [user_filter]
+        params = {}
+        if rdt_county_id:
+            where_parts.append("rdt_county_id = :rdt_county_id")
+            params["rdt_county_id"] = rdt_county_id
+        time_parts, time_params = self._time_filters(
+            begin_time, end_time, snapshot_date, snapshot_start_date, snapshot_end_date
+        )
+        where_parts.extend(time_parts)
+        params.update(time_params)
+        where_sql = "WHERE " + " AND ".join(where_parts)
+
+        tbl = self.user_score_table
+        sql = f"""
+        SELECT
+          CASE
+            WHEN outage_cnt = 1 THEN '1'
+            WHEN outage_cnt = 2 THEN '2'
+            WHEN outage_cnt >= 3 THEN '3+'
+          END AS bucket,
+          COUNT(*) AS userCount
+        FROM (
+          SELECT cons_no, COUNT(*) AS outage_cnt
+          FROM `{tbl}`
+          {where_sql}
+          GROUP BY cons_no
+        ) sub
+        GROUP BY bucket
+        """
+        rows = self._fetch_all(sql, params)
+        for row in rows:
+            row["userCount"] = int(row.get("userCount") or 0)
         return rows
 
     def _build_where_clause(
