@@ -1,9 +1,11 @@
 """
 Fetch outage dimension data: substation, feeder, equipment hierarchy.
 
-Per month window:
-  1. queryOutageList → extract substation + feeder, collect outageNumbers
-  2. queryOutageDetail (with same month window) → extract equipment from nested outageEventEquipVos
+Per month window, call queryOutageDetail with time range + pagination:
+  - Event-level pagination via outagePage/outagePerPage
+  - Equipment nested in each event's outageEventEquipVos
+  - Substation/feeder info from event-level fields (rdtSubsId, rdtFeederId, etc.)
+  - Equipment-feeder relation: link via parent event's rdtFeederId (no lookup map needed)
 """
 import requests
 import time
@@ -114,13 +116,13 @@ def extract_equipments_from_detail(event_record, feeder_id):
 
 def fetch_and_store(cfg, token_provider, start_date=None, end_date=None):
     api_cfg = cfg["api"]
-    list_url = api_cfg["outage_list_url"]
     detail_url = api_cfg["outage_detail_url"]
 
     start_date = start_date or api_cfg["start_date"]
     end_date = end_date or api_cfg["end_date"]
     per_page = api_cfg.get("per_page", 300)
     max_pages = api_cfg.get("max_pages", 50)
+    equip_per_page = api_cfg.get("equip_per_page", 500)
 
     ensure_database(cfg)
     conn = get_connection(cfg)
@@ -138,107 +140,78 @@ def fetch_and_store(cfg, token_provider, start_date=None, end_date=None):
 
         for begin_time, end_time in windows:
             month_label = begin_time[:7]
-
-            # ----- Step 1: queryOutageList → substation + feeder + outageNumbers -----
-            month_outage_numbers = []
+            month_equipments = {}
+            month_relations = []
             month_records = 0
-            page = 1
+            t0 = time.time()
 
-            while page <= max_pages:
+            outage_page = 1
+            while outage_page <= max_pages:
                 body = {
-                    "page": page,
-                    "perPage": per_page,
-                    "sort": "1",
-                    "orderBy": "beginTime",
-                    "sysSource": 0,
-                    "beginTimeFrom": begin_time,
-                    "beginTimeTo": end_time,
+                    "outagePage": outage_page,
+                    "outagePerPage": per_page,
+                    "outageEquipPage": 1,
+                    "outageEquipPerPage": equip_per_page,
+                    "queryTypes": ["1", "2"],
+                    "sysSource": "0",
+                    "beginTime": begin_time,
+                    "endTime": end_time,
                 }
 
-                status_code, resp = api_request_with_retry(token_provider, list_url, body)
+                status_code, resp = api_request_with_retry(
+                    token_provider, detail_url, body,
+                )
 
                 if not resp or resp.get("status") != "000000":
-                    print(f"  [error][list] {month_label} page={page}, status={status_code}")
+                    print(f"  [error][detail] {month_label} page={outage_page}, "
+                          f"status={status_code}")
                     break
 
                 result = resp.get("result", {})
-                records = result.get("records", [])
-                pages = result.get("pages", 1)
+                event_records = result.get("records", [])
+                total_pages = result.get("pages", 1)
 
-                substations, feeders = extract_substations_feeders(records)
-                all_substations.update(substations)
-                all_feeders.update(feeders)
+                page_equip = 0
+                for event_rec in event_records:
+                    # substation + feeder: from event-level fields
+                    subs, feeds = extract_substations_feeders([event_rec])
+                    all_substations.update(subs)
+                    all_feeders.update(feeds)
 
-                for rec in records:
-                    outage_number = (rec.get("outageNumber") or "").strip()
-                    if outage_number:
-                        month_outage_numbers.append(outage_number)
+                    # equipment: from nested outageEventEquipVos
+                    feeder_id = (event_rec.get("rdtFeederId") or "").strip()
+                    equipments, relations = extract_equipments_from_detail(
+                        event_rec, feeder_id,
+                    )
+                    month_equipments.update(equipments)
+                    month_relations.extend(relations)
+                    page_equip += len(equipments)
 
-                month_records += len(records)
+                    # warn if equipment was truncated
+                    equip_vos = event_rec.get("outageEventEquipVos", {})
+                    if equip_vos.get("pages", 1) > 1:
+                        on = event_rec.get("outageNumber", "?")
+                        print(f"  [warn] Event {on} has {equip_vos.get('total', '?')} "
+                              f"equipment records ({equip_vos['pages']} pages). "
+                              f"Only page 1 fetched.")
 
-                if page >= pages:
+                month_records += len(event_records)
+                print(f"  [{month_label}] page {outage_page}/{total_pages}: "
+                      f"{len(event_records)} 事件, {page_equip} 设备")
+
+                if outage_page >= total_pages:
                     break
-                page += 1
+                outage_page += 1
 
-            print(f"  [{month_label}][list] {month_records} 条事件, {len(month_outage_numbers)} 个事件号")
-
-            if not month_outage_numbers:
-                time.sleep(2)
-                continue
-
-            # ----- Step 2: queryOutageDetail → equipment -----
-            batch_size = 10
-            month_equipments = {}
-            month_relations = []
-            outage_feeder_map = {}
-
-            for rec in records:
-                outage_number = (rec.get("outageNumber") or "").strip()
-                feeder_id = (rec.get("rdtFeederId") or "").strip()
-                if outage_number and feeder_id:
-                    outage_feeder_map[outage_number] = feeder_id
-
-            for i in range(0, len(month_outage_numbers), batch_size):
-                batch = month_outage_numbers[i:i + batch_size]
-                page = 1
-
-                while page <= max_pages:
-                    body = {
-                        "page": page,
-                        "perPage": per_page,
-                        "sysSource": 0,
-                        "beginTime": begin_time,
-                        "endTime": end_time,
-                        "outageNumbers": batch,
-                    }
-
-                    status_code, resp = api_request_with_retry(token_provider, detail_url, body)
-
-                    if not resp or resp.get("status") != "000000":
-                        print(f"  [error][detail] {month_label} batch={i//batch_size+1} page={page}, status={status_code}")
-                        break
-
-                    result = resp.get("result", {})
-                    event_records = result.get("records", [])
-                    pages = result.get("pages", 1)
-
-                    for event_rec in event_records:
-                        outage_number = (event_rec.get("outageNumber") or "").strip()
-                        feeder_id = outage_feeder_map.get(outage_number, "")
-                        equipments, relations = extract_equipments_from_detail(event_rec, feeder_id)
-                        month_equipments.update(equipments)
-                        month_relations.extend(relations)
-
-                    if page >= pages:
-                        break
-                    page += 1
-
-                time.sleep(1)
+            print(f"  [{month_label}] 拉取完成: {month_records} 事件, "
+                  f"设备 {len(month_equipments)}, 关联 {len(month_relations)}, "
+                  f"耗时 {time.time()-t0:.1f}s")
 
             all_equipments.update(month_equipments)
             all_relations.extend(month_relations)
 
-            # 每月 upsert 一次
+            # monthly upsert
+            t1 = time.time()
             upsert_substations(conn, list(all_substations.values()))
             upsert_feeders(conn, list(all_feeders.values()))
             if month_equipments:
@@ -252,9 +225,7 @@ def fetch_and_store(cfg, token_provider, start_date=None, end_date=None):
                         seen.add(key)
                         unique.append(r)
                 upsert_equipments_feeders(conn, unique)
-
-            print(f"  [{month_label}][detail] 设备 {len(month_equipments)}, "
-                  f"关联 {len(month_relations)}, "
+            print(f"  [{month_label}] 写入完成, 耗时 {time.time()-t1:.1f}s, "
                   f"累计: 变电站 {len(all_substations)} 线路 {len(all_feeders)} "
                   f"设备 {len(all_equipments)} 关联 {len(all_relations)}")
 

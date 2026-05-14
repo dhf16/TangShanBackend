@@ -981,6 +981,64 @@ POST /api/county/equipment-detail
 
 ---
 
+## 11. 用户停电详情
+
+根据停电编号 + 用户编号查询该用户某次停电的详细信息。
+
+```
+POST /api/county/user-detail
+```
+
+### 请求参数
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| consNo | string | **是** | 用户编号 |
+| outageNumber | string | **是** | 停电编号 |
+
+### 请求示例
+
+```json
+{
+  "consNo": "1234567890",
+  "outageNumber": "OT20250101001"
+}
+```
+
+### 响应示例
+
+```json
+{
+  "code": 0,
+  "success": true,
+  "message": "ok",
+  "data": {
+    "consNo": "1234567890",
+    "consName": "唐山钢铁有限公司",
+    "consAddr": "唐山市路北区某某路1号",
+    "outageNature": "1",
+    "equipmentName": "10kV某某开关",
+    "tgName": "某某台区",
+    "tradeName": "大工业"
+  },
+  "timestamp": "2026-05-12T10:00:00+08:00"
+}
+```
+
+### 响应字段说明
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| data.consNo | string | 用户编号 |
+| data.consName | string | 用户名称 |
+| data.consAddr | string | 用户地址 |
+| data.outageNature | string | 停电性质 |
+| data.equipmentName | string | 设备名称 |
+| data.tgName | string | 台区名称 |
+| data.tradeName | string | 行业名称 |
+
+---
+
 ## 参数校验规则
 
 | 场景 | 错误信息 | HTTP 状态码 |

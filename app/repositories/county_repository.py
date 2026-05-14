@@ -596,6 +596,24 @@ class CountyRepository:
             "sensitiveUsers": sensitive_users,
         }
 
+    def user_outage_detail(self, cons_no, outage_number):
+        tbl = self.user_score_table
+        sql = f"""
+        SELECT
+          cons_no AS consNo,
+          IFNULL(cons_name, '') AS consName,
+          IFNULL(cons_addr, '') AS consAddr,
+          IFNULL(outage_nature, '') AS outageNature,
+          IFNULL(equipment_name, '') AS equipmentName,
+          IFNULL(tg_name, '') AS tgName,
+          IFNULL(trade_name, '') AS tradeName
+        FROM `{tbl}`
+        WHERE cons_no = :cons_no AND outage_number = :outage_number
+        LIMIT 1
+        """
+        row = self._fetch_one(sql, {"cons_no": cons_no, "outage_number": outage_number})
+        return row if row and row.get("consNo") else None
+
     def bar_chart_by_maint_group(
         self, county_id, begin_time=None, end_time=None,
         snapshot_date=None, snapshot_start_date=None, snapshot_end_date=None,

@@ -439,7 +439,21 @@ def county_equipment_detail():
         current_app.logger.exception("Failed to query equipment detail")
         return error("Failed to query equipment detail", 500)
 
-    if not result:
-        return error("Equipment not found", 404)
+    return success(result)
+
+
+@county_bp.route("/user-detail", methods=["POST"])
+def county_user_detail():
+    req_data = _json_body()
+    cons_no = _optional_str(req_data.get("consNo"))
+    outage_number = _optional_str(req_data.get("outageNumber"))
+    if not cons_no or not outage_number:
+        return error("consNo and outageNumber are required", 400)
+
+    try:
+        result = county_repository.user_outage_detail(cons_no, outage_number)
+    except Exception:
+        current_app.logger.exception("Failed to query user detail")
+        return error("Failed to query user detail", 500)
 
     return success(result)
