@@ -181,12 +181,7 @@ class RightPanelRepository:
             snapshot_start_date=snapshot_start_date,
             snapshot_end_date=snapshot_end_date,
         )
-        if entity_type == "substation":
-            id_expr = "s.subs_id"
-            name_expr = "s.subs_name"
-        else:
-            id_expr = "f.feeder_id"
-            name_expr = "f.feeder_name"
+        id_expr, name_expr = self._entity_exprs(entity_type)
 
         row = self._fetch_one(
             f"""
@@ -209,7 +204,55 @@ class RightPanelRepository:
             """,
             params,
         )
-        return _mode_summary(entity_type, row)
+        matched_events = self.fault_event_match_count(
+            begin_time=begin_time,
+            end_time=end_time,
+            county_id=county_id,
+            dimension=entity_type,
+            snapshot_date=snapshot_date,
+            snapshot_start_date=snapshot_start_date,
+            snapshot_end_date=snapshot_end_date,
+        )
+        return _mode_summary(entity_type, row, matched_events=matched_events)
+
+    def fault_summary(
+        self,
+        begin_time,
+        end_time,
+        county_id=None,
+        snapshot_date=None,
+        snapshot_start_date=None,
+        snapshot_end_date=None,
+    ):
+        line_summary = self.fault_location_by_entity(
+            begin_time=begin_time,
+            end_time=end_time,
+            county_id=county_id,
+            entity_type="line",
+            snapshot_date=snapshot_date,
+            snapshot_start_date=snapshot_start_date,
+            snapshot_end_date=snapshot_end_date,
+        )
+        feeder_summary = {**line_summary, "key": "feeder", "label": "feeder"}
+        substation_summary = self.fault_location_by_entity(
+            begin_time=begin_time,
+            end_time=end_time,
+            county_id=county_id,
+            entity_type="substation",
+            snapshot_date=snapshot_date,
+            snapshot_start_date=snapshot_start_date,
+            snapshot_end_date=snapshot_end_date,
+        )
+        return {
+            "highImpact": {"count": _bar_count(line_summary, "danger")},
+            "mediumImpact": {"count": _bar_count(line_summary, "warning")},
+            "lowImpact": {"count": _bar_count(line_summary, "safe")},
+            "modes": {
+                "line": line_summary,
+                "feeder": feeder_summary,
+                "substation": substation_summary,
+            },
+        }
 
     def outage_scope_summary(
         self,
@@ -309,6 +352,96 @@ class RightPanelRepository:
             "list": [self._format_event_row(row) for row in rows],
         }
 
+    def fault_events(
+        self,
+        begin_time,
+        end_time,
+        dimension="line",
+        county_id=None,
+        keyword=None,
+        outage_nature=None,
+        page=1,
+        per_page=20,
+        snapshot_date=None,
+        snapshot_start_date=None,
+        snapshot_end_date=None,
+    ):
+        where_sql, params = self._build_base_where(
+            begin_time,
+            end_time,
+            county_id=county_id,
+            snapshot_date=snapshot_date,
+            snapshot_start_date=snapshot_start_date,
+            snapshot_end_date=snapshot_end_date,
+        )
+        event_sql = self._event_summary_sql(where_sql)
+        outer_where, outer_params = self._build_event_outer_filter(
+            keyword=keyword,
+            outage_nature=outage_nature,
+            dimension=dimension,
+        )
+        filtered_event_sql = f"SELECT * FROM ({event_sql}) e {outer_where}"
+        merged_params = {**params, **outer_params}
+        summary = self._event_summary_counts(filtered_event_sql, merged_params)
+
+        count_row = self._fetch_one(
+            f"SELECT COUNT(*) AS total FROM ({filtered_event_sql}) fe",
+            merged_params,
+        )
+        total = _to_int(count_row.get("total"))
+
+        rows = self._fetch_all(
+            f"""
+            SELECT *
+            FROM ({filtered_event_sql}) fe
+            ORDER BY fe.beginTime DESC, fe.outageNumber DESC
+            LIMIT :_limit OFFSET :_offset
+            """,
+            {
+                **merged_params,
+                "_limit": per_page,
+                "_offset": (page - 1) * per_page,
+            },
+        )
+        return {
+            "summary": summary,
+            "total": total,
+            "page": page,
+            "perPage": per_page,
+            "dimension": _normalize_dimension(dimension),
+            "list": [self._format_event_row(row) for row in rows],
+        }
+
+    def fault_event_match_count(
+        self,
+        begin_time,
+        end_time,
+        county_id=None,
+        dimension="line",
+        snapshot_date=None,
+        snapshot_start_date=None,
+        snapshot_end_date=None,
+    ):
+        where_sql, params = self._build_base_where(
+            begin_time,
+            end_time,
+            county_id=county_id,
+            snapshot_date=snapshot_date,
+            snapshot_start_date=snapshot_start_date,
+            snapshot_end_date=snapshot_end_date,
+        )
+        event_sql = self._event_summary_sql(where_sql)
+        dimension_where = self._dimension_outer_filter_sql(dimension)
+        row = self._fetch_one(
+            f"""
+            SELECT COUNT(*) AS total
+            FROM ({event_sql}) e
+            WHERE {dimension_where}
+            """,
+            params,
+        )
+        return _to_int(row.get("total"))
+
     def outage_event_detail(self, outage_number):
         where_sql = """
         WHERE (
@@ -355,18 +488,63 @@ class RightPanelRepository:
             snapshot_start_date=snapshot_start_date,
             snapshot_end_date=snapshot_end_date,
         )
-        chain_sql = self._chain_summary_sql(where_sql)
+        event_key = self._event_key_expr()
         count_row = self._fetch_one(
-            f"SELECT COUNT(*) AS total FROM ({chain_sql}) c",
+            f"""
+            SELECT COUNT(*) AS total
+            FROM (
+              SELECT {event_key} AS outageKey
+              FROM `{self.user_score_table}` ou
+              {where_sql}
+              GROUP BY {event_key}
+            ) c
+            """,
             params,
         )
         total = _to_int(count_row.get("total"))
+        page_key_sql = f"""
+        SELECT
+          {event_key} AS outageKey,
+          MIN(NULLIF(ou.begin_time, '')) AS beginTime,
+          COALESCE(MAX(NULLIF(ou.outage_number, '')), MAX({event_key})) AS outageNumber
+        FROM `{self.user_score_table}` ou
+        {where_sql}
+        GROUP BY {event_key}
+        ORDER BY beginTime DESC, outageNumber DESC
+        LIMIT :_limit OFFSET :_offset
+        """
         rows = self._fetch_all(
             f"""
-            SELECT *
-            FROM ({chain_sql}) c
-            ORDER BY c.beginTime DESC, c.outageNumber DESC
-            LIMIT :_limit OFFSET :_offset
+            SELECT
+              pk.outageKey,
+              pk.outageNumber,
+              MAX(COALESCE(c.county_name, ou.rdt_county_name, '')) AS countyName,
+              pk.beginTime,
+              MAX(IFNULL(f.feeder_name, '')) AS feederName,
+              GROUP_CONCAT(DISTINCT NULLIF(f.feeder_id, '') ORDER BY f.feeder_id SEPARATOR '|') AS feederIdsText,
+              GROUP_CONCAT(DISTINCT NULLIF(f.feeder_name, '') ORDER BY f.feeder_name SEPARATOR '|') AS feederNamesText,
+              MAX(IFNULL(s.subs_name, '')) AS substationName,
+              MAX(COALESCE(ou.rdt_maint_group_name, '')) AS maintGroupName,
+              GROUP_CONCAT(DISTINCT NULLIF(ou.equipment_id, '') ORDER BY ou.equipment_id SEPARATOR '|') AS equipmentIdsText,
+              GROUP_CONCAT(DISTINCT NULLIF(ou.equipment_name, '') ORDER BY ou.equipment_name SEPARATOR '|') AS equipmentNamesText,
+              GROUP_CONCAT(DISTINCT CASE
+                WHEN ou.is_key_user = 1 THEN NULLIF(ou.cons_name, '')
+              END ORDER BY ou.cons_name SEPARATOR '|') AS importantUserText,
+              GROUP_CONCAT(DISTINCT CASE
+                WHEN ou.is_sensitive_user = 1 THEN NULLIF(ou.cons_name, '')
+              END ORDER BY ou.cons_name SEPARATOR '|') AS sensitiveUserText,
+              COUNT(DISTINCT CASE
+                WHEN ou.is_key_user = 0 AND ou.is_sensitive_user = 0 THEN NULLIF(ou.cons_no, '')
+              END) AS normalUserCount
+            FROM ({page_key_sql}) pk
+            JOIN `{self.user_score_table}` ou
+              ON {event_key} = pk.outageKey
+            LEFT JOIN equipment_feeder ef ON ou.equipment_id = ef.equipment_id
+            LEFT JOIN feeder f ON ef.feeder_id = f.feeder_id
+            LEFT JOIN substation s ON f.subs_id = s.subs_id
+            LEFT JOIN county c ON ou.rdt_county_id = c.county_id
+            GROUP BY pk.outageKey, pk.outageNumber, pk.beginTime
+            ORDER BY pk.beginTime DESC, pk.outageNumber DESC
             """,
             {
                 **params,
@@ -416,16 +594,14 @@ class RightPanelRepository:
     def _joined_from_sql(self):
         return f"""
         FROM `{self.user_score_table}` ou
-        LEFT JOIN equipment e ON ou.equipment_id = e.equipment_id
-        LEFT JOIN equipment_feeder ef ON e.equipment_id = ef.equipment_id
+        LEFT JOIN equipment_feeder ef ON ou.equipment_id = ef.equipment_id
         LEFT JOIN feeder f ON ef.feeder_id = f.feeder_id
         LEFT JOIN substation s ON f.subs_id = s.subs_id
-        LEFT JOIN maint_group mg ON e.maint_group_id = mg.maint_group_id
         LEFT JOIN county c ON ou.rdt_county_id = c.county_id
         """
 
     def _event_summary_sql(self, where_sql):
-        event_key = "COALESCE(NULLIF(ou.outage_number, ''), ou.record_key, CAST(ou.id AS CHAR))"
+        event_key = self._event_key_expr()
         return f"""
         SELECT
           {event_key} AS outageKey,
@@ -445,18 +621,26 @@ class RightPanelRepository:
           END) AS normalUserCount,
           MAX(IFNULL(f.feeder_id, '')) AS feederId,
           MAX(IFNULL(f.feeder_name, '')) AS feederName,
+          GROUP_CONCAT(DISTINCT NULLIF(f.feeder_id, '') ORDER BY f.feeder_id SEPARATOR '|') AS feederIdsText,
+          GROUP_CONCAT(DISTINCT NULLIF(f.feeder_name, '') ORDER BY f.feeder_name SEPARATOR '|') AS feederNamesText,
           MAX(IFNULL(s.subs_id, '')) AS substationId,
           MAX(IFNULL(s.subs_name, '')) AS substationName,
-          MAX(COALESCE(mg.maint_group_id, ou.rdt_maint_group_id, '')) AS maintGroupId,
-          MAX(COALESCE(mg.maint_group_name, ou.rdt_maint_group_name, '')) AS maintGroupName,
-          MAX(IFNULL(e.equipment_name, ou.equipment_name)) AS equipmentName
+          MAX(COALESCE(ou.rdt_maint_group_id, '')) AS maintGroupId,
+          MAX(COALESCE(ou.rdt_maint_group_name, '')) AS maintGroupName,
+          MAX(COALESCE(NULLIF(ou.equipment_name, ''), '')) AS equipmentName,
+          GROUP_CONCAT(DISTINCT NULLIF(ou.equipment_id, '') ORDER BY ou.equipment_id SEPARATOR '|') AS equipmentIdsText,
+          GROUP_CONCAT(
+            DISTINCT NULLIF(ou.equipment_name, '')
+            ORDER BY ou.equipment_name
+            SEPARATOR '|'
+          ) AS equipmentNamesText
         {self._joined_from_sql()}
         {where_sql}
         GROUP BY {event_key}
         """
 
     def _chain_summary_sql(self, where_sql):
-        event_key = "COALESCE(NULLIF(ou.outage_number, ''), ou.record_key, CAST(ou.id AS CHAR))"
+        event_key = self._event_key_expr()
         return f"""
         SELECT
           {event_key} AS outageKey,
@@ -464,8 +648,16 @@ class RightPanelRepository:
           MAX(COALESCE(c.county_name, ou.rdt_county_name, '')) AS countyName,
           MIN(NULLIF(ou.begin_time, '')) AS beginTime,
           MAX(IFNULL(f.feeder_name, '')) AS feederName,
+          GROUP_CONCAT(DISTINCT NULLIF(f.feeder_id, '') ORDER BY f.feeder_id SEPARATOR '|') AS feederIdsText,
+          GROUP_CONCAT(DISTINCT NULLIF(f.feeder_name, '') ORDER BY f.feeder_name SEPARATOR '|') AS feederNamesText,
           MAX(IFNULL(s.subs_name, '')) AS substationName,
-          MAX(COALESCE(mg.maint_group_name, ou.rdt_maint_group_name, '')) AS maintGroupName,
+          MAX(COALESCE(ou.rdt_maint_group_name, '')) AS maintGroupName,
+          GROUP_CONCAT(DISTINCT NULLIF(ou.equipment_id, '') ORDER BY ou.equipment_id SEPARATOR '|') AS equipmentIdsText,
+          GROUP_CONCAT(
+            DISTINCT NULLIF(ou.equipment_name, '')
+            ORDER BY ou.equipment_name
+            SEPARATOR '|'
+          ) AS equipmentNamesText,
           GROUP_CONCAT(DISTINCT CASE
             WHEN ou.is_key_user = 1 THEN NULLIF(ou.cons_name, '')
           END ORDER BY ou.cons_name SEPARATOR '|') AS importantUserText,
@@ -479,6 +671,10 @@ class RightPanelRepository:
         {where_sql}
         GROUP BY {event_key}
         """
+
+    @staticmethod
+    def _event_key_expr():
+        return "COALESCE(NULLIF(ou.outage_number, ''), ou.record_key, CAST(ou.id AS CHAR))"
 
     def _event_summary_counts(self, event_sql, params):
         row = self._fetch_one(
@@ -503,7 +699,7 @@ class RightPanelRepository:
             "unrestoredEvents": _to_int(row.get("unrestoredEvents")),
         }
 
-    def _build_event_outer_filter(self, keyword=None, outage_nature=None):
+    def _build_event_outer_filter(self, keyword=None, outage_nature=None, dimension=None):
         parts = []
         params = {}
         if keyword:
@@ -515,9 +711,33 @@ class RightPanelRepository:
             parts.append(f"{self._nature_bucket_sql('e.outageNatureCode')} = :nature_bucket")
             params["nature_bucket"] = nature_bucket
 
+        dimension_sql = self._dimension_outer_filter_sql(dimension)
+        if dimension_sql:
+            parts.append(dimension_sql)
+
         if not parts:
             return "", params
         return "WHERE " + " AND ".join(parts), params
+
+    @staticmethod
+    def _entity_exprs(entity_type):
+        dimension = _normalize_dimension(entity_type)
+        if dimension == "substation":
+            return "s.subs_id", "s.subs_name"
+        if dimension == "equipment":
+            return "ou.equipment_id", "ou.equipment_name"
+        return "f.feeder_id", "f.feeder_name"
+
+    @staticmethod
+    def _dimension_outer_filter_sql(dimension=None):
+        normalized = _normalize_dimension(dimension)
+        if normalized == "substation":
+            return "((e.substationId IS NOT NULL AND e.substationId <> '') OR (e.substationName IS NOT NULL AND e.substationName <> ''))"
+        if normalized == "equipment":
+            return "((e.equipmentName IS NOT NULL AND e.equipmentName <> '') OR e.affectedEquipment > 0)"
+        if normalized == "line":
+            return "((e.feederId IS NOT NULL AND e.feederId <> '') OR (e.feederName IS NOT NULL AND e.feederName <> ''))"
+        return ""
 
     @staticmethod
     def _nature_bucket_sql(column):
@@ -532,6 +752,11 @@ class RightPanelRepository:
     def _format_event_row(self, row):
         nature_code = str(row.get("outageNatureCode") or "").strip()
         is_restored = _to_int(row.get("isRestored")) == 1
+        feeder_ids = _split_user_text(row.get("feederIdsText"))
+        feeder_names = _split_user_text(row.get("feederNamesText"))
+        equipment_ids = _split_user_text(row.get("equipmentIdsText"))
+        equipment_names = _split_user_text(row.get("equipmentNamesText"))
+        match_status = "equipment_feeder_matched" if feeder_ids or feeder_names else "equipment_only"
         return {
             "outageNumber": row.get("outageNumber", ""),
             "countyId": row.get("countyId", ""),
@@ -548,17 +773,26 @@ class RightPanelRepository:
             "feederId": row.get("feederId", ""),
             "feederName": row.get("feederName", ""),
             "rdtFeederName": row.get("feederName", ""),
+            "feederIds": feeder_ids,
+            "feederNames": feeder_names,
             "substationId": row.get("substationId", ""),
             "substationName": row.get("substationName", ""),
             "rdtSubsName": row.get("substationName", ""),
             "maintGroupId": row.get("maintGroupId", ""),
             "maintGroupName": row.get("maintGroupName", ""),
             "equipmentName": row.get("equipmentName", ""),
+            "equipmentIds": equipment_ids,
+            "equipmentNames": equipment_names,
+            "matchStatus": match_status,
         }
 
     def _format_chain_row(self, row):
         important_users = _split_user_text(row.get("importantUserText"))
         sensitive_users = _split_user_text(row.get("sensitiveUserText"))
+        feeder_ids = _split_user_text(row.get("feederIdsText"))
+        feeder_names = _split_user_text(row.get("feederNamesText"))
+        equipment_ids = _split_user_text(row.get("equipmentIdsText"))
+        equipment_names = _split_user_text(row.get("equipmentNamesText"))
         outage_number = row.get("outageNumber", "")
         feeder_name = row.get("feederName") or "-"
         substation_name = row.get("substationName") or "-"
@@ -568,14 +802,19 @@ class RightPanelRepository:
             "countyName": row.get("countyName", ""),
             "feederName": feeder_name,
             "rdtFeederName": feeder_name,
+            "feederIds": feeder_ids,
+            "feederNames": feeder_names,
             "substationName": substation_name,
             "rdtSubsName": substation_name,
             "maintGroupName": row.get("maintGroupName") or "-",
+            "equipmentIds": equipment_ids,
+            "equipmentNames": equipment_names,
             "importantUsers": important_users,
             "sensitiveUsers": sensitive_users,
             "importantUserText": ", ".join(important_users) if important_users else "none",
             "sensitiveUserText": ", ".join(sensitive_users) if sensitive_users else "none",
             "normalUserCount": _to_int(row.get("normalUserCount")),
+            "matchStatus": "equipment_feeder_matched" if feeder_ids or feeder_names else "equipment_only",
         }
 
 
@@ -586,23 +825,66 @@ def _to_int(value):
         return 0
 
 
-def _mode_summary(key, row):
+def _bar_count(summary, key):
+    bars = summary.get("bars") if isinstance(summary, dict) else []
+    for item in bars:
+        if item.get("key") == key or item.get("riskKey") == key:
+            return _to_int(item.get("count"))
+    return 0
+
+
+def _mode_summary(key, row, matched_events=0):
+    display_key = str(key or "").strip().lower()
+    normalized = _normalize_dimension(display_key) or display_key
     labels = {
+        "line": "line",
         "feeder": "feeder",
         "substation": "substation",
+        "equipment": "equipment",
     }
     danger = _to_int(row.get("danger"))
     warning = _to_int(row.get("warning"))
     safe = _to_int(row.get("safe"))
     total = _to_int(row.get("total"))
+    bars = [
+        {
+            "level": "danger",
+            "key": "danger",
+            "riskKey": "danger",
+            "colorKey": "red",
+            "colorLabel": "red",
+            "colorClass": "red",
+            "count": danger,
+        },
+        {
+            "level": "warning",
+            "key": "warning",
+            "riskKey": "warning",
+            "colorKey": "yellow",
+            "colorLabel": "yellow",
+            "colorClass": "yellow",
+            "count": warning,
+        },
+        {
+            "level": "safe",
+            "key": "safe",
+            "riskKey": "safe",
+            "colorKey": "green",
+            "colorLabel": "green",
+            "colorClass": "green",
+            "count": safe,
+        },
+    ]
     return {
-        "key": key,
-        "label": labels.get(key, key),
+        "key": display_key or normalized,
+        "dimension": normalized,
+        "label": labels.get(display_key, labels.get(normalized, normalized)),
         "total": total,
-        "bars": [
-            {"level": "danger", "key": "danger", "colorLabel": "red", "count": danger},
-            {"level": "warning", "key": "warning", "colorLabel": "yellow", "count": warning},
-            {"level": "safe", "key": "safe", "colorLabel": "green", "count": safe},
+        "matchedEvents": _to_int(matched_events),
+        "bars": bars,
+        "colorBars": [
+            {"key": item["colorKey"], "riskKey": item["riskKey"], "count": item["count"]}
+            for item in bars
         ],
     }
 
@@ -627,6 +909,17 @@ def _normalize_nature_bucket(value):
     if plain in ("other", "03"):
         return "other"
     return None
+
+
+def _normalize_dimension(value):
+    plain = str(value or "").strip().lower()
+    if plain in ("line", "feeder", "circuit"):
+        return "line"
+    if plain in ("substation", "subs", "station"):
+        return "substation"
+    if plain in ("equipment", "equip", "device"):
+        return "equipment"
+    return ""
 
 
 def _split_user_text(value):
