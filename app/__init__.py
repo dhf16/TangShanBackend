@@ -25,9 +25,11 @@ def create_app(config_name=None):
 
     from app.api import api_bp
     from app.repositories.county_repository import county_repository
+    from app.repositories.right_panel_repository import right_panel_repository
 
     app.register_blueprint(api_bp)
     county_repository.init_app(app)
+    right_panel_repository.init_app(app)
 
     _register_error_handlers(app)
 
