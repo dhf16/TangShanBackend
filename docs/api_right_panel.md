@@ -55,6 +55,7 @@ Content-Type: application/json
 | beginTime | string | 是 | 开始时间，格式 `YYYY-MM-DD` 或 `YYYY-MM-DD HH:mm:ss` |
 | endTime | string | 是 | 结束时间，格式 `YYYY-MM-DD` 或 `YYYY-MM-DD HH:mm:ss` |
 | countyId | string | 否 | 区县/供电单位 ID |
+| cityId | string | 否 | 地市 ID，目前用于县区警示灯过滤；不传时默认唐山市 |
 | snapshotDate | string | 否 | 快照日期，精确匹配 |
 | snapshotStartDate | string | 否 | 快照开始日期 |
 | snapshotEndDate | string | 否 | 快照结束日期 |
@@ -103,7 +104,8 @@ POST /api/right-panel/overview
 ```json
 {
   "beginTime": "2025-01-01 00:00:00",
-  "endTime": "2026-01-30 00:10:59"
+  "endTime": "2026-01-30 00:10:59",
+  "cityId": "1100F3DE22316FADE050007F01006CBE"
 }
 ```
 
@@ -114,6 +116,23 @@ POST /api/right-panel/overview
 | countyWarnings | 县区告警灯列表 |
 | faultLocation | 电力故障定位汇总 |
 | outageScope | 停电范围评估汇总 |
+
+`countyWarnings` 单项字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| countyId | 区县/供电单位 ID |
+| countyName | 区县/供电单位名称 |
+| totalEvents | 当前时间范围内该区县停电事件总数 |
+| activeEvents | 当前时间范围内该区县未复电事件数 |
+| hasOutage | 是否存在未复电停电事件，`activeEvents > 0` 时为 `true` |
+| level | 告警等级，`danger` 表示有未复电事件，`safe` 表示无未复电事件 |
+
+说明：
+
+- `faultLocation` 的结构与 `/api/fault/summary` 中的故障定位汇总结构一致。
+- `outageScope` 的结构与 `/api/outage-scope/summary` 中的停电范围汇总结构一致。
+- `countyWarnings` 会按 `cityId` 过滤；如果不传 `cityId`，默认使用唐山市 `1100F3DE22316FADE050007F01006CBE`，当前返回唐山下 13 个单位，包含“国网唐山供电公司运维检修部”。
 
 ## 五、电力故障定位汇总
 
@@ -205,6 +224,17 @@ POST /api/fault/event-list
 | dimension | 实际查询维度 |
 | list | 事件列表 |
 
+`summary` 字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| totalEvents | 当前条件下事件总数 |
+| plannedEvents | 计划停电事件数，`outageNatureCode = 01` |
+| faultEvents | 故障停电事件数，`outageNatureCode = 02` |
+| otherEvents | 其他停电事件数 |
+| restoredEvents | 已复电事件数 |
+| unrestoredEvents | 未复电事件数 |
+
 `list` 单项主要字段：
 
 | 字段 | 说明 |
@@ -234,6 +264,13 @@ outage_user_full.equipment_id
 
 如果能匹配到馈线，`matchStatus = equipment_feeder_matched`；如果只能拿到停电事件设备，`matchStatus = equipment_only`。
 
+`matchStatus` 枚举：
+
+| 值 | 说明 |
+| --- | --- |
+| equipment_feeder_matched | 已通过 `outage_user_full.equipment_id -> equipment_feeder -> feeder` 匹配到馈线 |
+| equipment_only | 只能从 `outage_user_full` 拿到设备信息，未匹配到馈线 |
+
 ## 七、故障设备列表兼容接口
 
 ```http
@@ -256,6 +293,12 @@ POST /api/fault/event-list
   "perPage": 10
 }
 ```
+
+返回结构：
+
+- 与 `/api/outage-scope/event-list` 一致。
+- 不支持 `dimension` 参数。
+- 保留此接口是为了兼容旧版前端或已有测试集合。
 
 ## 八、停电范围评估汇总
 
@@ -320,6 +363,12 @@ POST /api/outage-scope/event-list
 ```
 
 返回结构同 `/api/fault/event-list` 的列表结构，但此接口不使用 `dimension` 过滤。
+
+额外说明：
+
+- `summary`、`total`、`page`、`perPage`、`list` 字段含义与 `/api/fault/event-list` 一致。
+- `keyword` 当前匹配停电编号或区县名称。
+- `outageNature` 可传 `planned`、`fault`、`other`、`01`、`02`、`03`。
 
 ## 十、停电范围链路列表
 
@@ -402,8 +451,13 @@ POST /api/right-panel/outage-event-detail
 | affectedUsers / affectedEquipment | 影响用户数 / 影响设备数 |
 | outageNature / outageNatureCode | 停电性质 |
 | isRestored / status | 是否复电 / 状态 |
+| outageFlag | 复电标识，当前 `1` 表示已复电，`0` 表示未复电 |
 | beginTime / endTime | 停电开始/结束时间 |
+| feederId / feederName | 主馈线 ID / 名称 |
 | feederIds / feederNames | 匹配到的馈线 ID / 名称列表 |
+| substationId / substationName | 变电站 ID / 名称 |
+| maintGroupId / maintGroupName | 运维班组/供电所 ID / 名称 |
+| equipmentName | 主设备名称 |
 | equipmentIds / equipmentNames | 涉及设备 ID / 名称列表 |
 | keyUserCount | 重要用户数 |
 | sensitiveUserCount | 敏感用户数 |
@@ -429,6 +483,11 @@ POST /api/right-panel/outage-events
 }
 ```
 
+说明：
+
+- 这是 `/api/outage-scope/event-list` 的右侧模块兼容入口。
+- 前端如果已经统一使用 `/api/outage-scope/event-list`，可以不单独调用此接口。
+
 ## 十三、右侧停电链路兼容接口
 
 ```http
@@ -447,6 +506,11 @@ POST /api/right-panel/outage-chains
   "perPage": 10
 }
 ```
+
+说明：
+
+- 这是 `/api/outage-scope/chains` 的右侧模块兼容入口。
+- 前端如果已经统一使用 `/api/outage-scope/chains`，可以不单独调用此接口。
 
 ## 十四、Apifox 建议测试顺序
 
