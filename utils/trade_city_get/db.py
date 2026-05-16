@@ -40,6 +40,7 @@ def load_config():
             "end_date": _env("API_END_DATE", "2026-04-30"),
             "per_page": int(_env("API_PER_PAGE", "300")),
             "max_pages": int(_env("API_MAX_PAGES", "200")),
+            "equip_per_page": int(_env("API_EQUIP_PER_PAGE", "500")),
         },
         "token": _build_token_config(),
     }
@@ -383,6 +384,29 @@ def ensure_outage_tables(conn):
     print("[db] outage dimension tables ready")
 
 
+def _batch_executemany(conn, sql, rows, table_name):
+    """executemany with batch commit (每 2000 条提交一次)."""
+    if not rows:
+        return 0
+    batch_size = 2000
+    total = len(rows)
+    committed = 0
+    try:
+        with conn.cursor() as cur:
+            for start in range(0, total, batch_size):
+                batch = rows[start:start + batch_size]
+                cur.executemany(sql, batch)
+                conn.commit()
+                committed += len(batch)
+                if total > batch_size:
+                    print(f"    [db] {table_name}: {committed}/{total}")
+    except Exception as e:
+        print(f"  [db] upsert {table_name} 失败: {e}")
+        conn.rollback()
+        raise
+    return total
+
+
 def upsert_substations(conn, substations):
     if not substations:
         return 0
@@ -395,21 +419,10 @@ def upsert_substations(conn, substations):
             county_id = VALUES(county_id),
             updated_at = NOW()
     """
-    count = 0
-    try:
-        with conn.cursor() as cur:
-            for s in substations:
-                cur.execute(sql, (
-                    s["subs_id"], s["subs_name"],
-                    s.get("city_id", ""), s.get("county_id", ""),
-                ))
-                count += 1
-        conn.commit()
-    except Exception as e:
-        print(f"  [db] upsert substations 失败: {e}")
-        conn.rollback()
-        raise
-    return count
+    rows = [(s["subs_id"], s["subs_name"],
+             s.get("city_id", ""), s.get("county_id", ""))
+            for s in substations]
+    return _batch_executemany(conn, sql, rows, "substation")
 
 
 def upsert_feeders(conn, feeders):
@@ -425,21 +438,10 @@ def upsert_feeders(conn, feeders):
             county_id = VALUES(county_id),
             updated_at = NOW()
     """
-    count = 0
-    try:
-        with conn.cursor() as cur:
-            for f in feeders:
-                cur.execute(sql, (
-                    f["feeder_id"], f["feeder_name"], f["subs_id"],
-                    f.get("city_id", ""), f.get("county_id", ""),
-                ))
-                count += 1
-        conn.commit()
-    except Exception as e:
-        print(f"  [db] upsert feeders 失败: {e}")
-        conn.rollback()
-        raise
-    return count
+    rows = [(f["feeder_id"], f["feeder_name"], f["subs_id"],
+             f.get("city_id", ""), f.get("county_id", ""))
+            for f in feeders]
+    return _batch_executemany(conn, sql, rows, "feeder")
 
 
 def upsert_equipments(conn, equipments):
@@ -461,23 +463,12 @@ def upsert_equipments(conn, equipments):
             county_id = VALUES(county_id),
             updated_at = NOW()
     """
-    count = 0
-    try:
-        with conn.cursor() as cur:
-            for eq in equipments:
-                cur.execute(sql, (
-                    eq["equipment_id"], eq["equipment_name"], eq["equipment_type"],
-                    eq.get("tg_id", ""), eq.get("tg_name", ""), eq.get("tg_no", ""),
-                    eq.get("pub_pri_flag", ""),
-                    eq.get("maint_group_id", ""), eq.get("county_id", ""),
-                ))
-                count += 1
-        conn.commit()
-    except Exception as e:
-        print(f"  [db] upsert equipments 失败: {e}")
-        conn.rollback()
-        raise
-    return count
+    rows = [(eq["equipment_id"], eq["equipment_name"], eq["equipment_type"],
+             eq.get("tg_id", ""), eq.get("tg_name", ""), eq.get("tg_no", ""),
+             eq.get("pub_pri_flag", ""),
+             eq.get("maint_group_id", ""), eq.get("county_id", ""))
+            for eq in equipments]
+    return _batch_executemany(conn, sql, rows, "equipment")
 
 
 def upsert_equipments_feeders(conn, relations):
@@ -487,15 +478,5 @@ def upsert_equipments_feeders(conn, relations):
         INSERT IGNORE INTO equipment_feeder (equipment_id, feeder_id)
         VALUES (%s, %s)
     """
-    count = 0
-    try:
-        with conn.cursor() as cur:
-            for r in relations:
-                cur.execute(sql, (r["equipment_id"], r["feeder_id"]))
-                count += 1
-        conn.commit()
-    except Exception as e:
-        print(f"  [db] upsert equipment_feeder 失败: {e}")
-        conn.rollback()
-        raise
-    return count
+    rows = [(r["equipment_id"], r["feeder_id"]) for r in relations]
+    return _batch_executemany(conn, sql, rows, "equipment_feeder")

@@ -91,6 +91,10 @@ def county_stats():
         return err
 
     county_id = _optional_str(req_data.get("countyId"))
+    city_id = _optional_str(req_data.get("cityId"))
+    if county_id and city_id:
+        return error("countyId and cityId are mutually exclusive", 400)
+
     common = {
         "begin_time": begin_time,
         "end_time": end_time,
@@ -99,23 +103,49 @@ def county_stats():
 
     try:
         if county_id:
-            stats = county_repository.stats_for_county(county_id=county_id, **common)
-            return success(stats)
-
-        rows = county_repository.stats_by_county(**common)
+            summary = county_repository.stats_for_county(county_id=county_id, **common)
+            rows = county_repository.bar_chart_by_maint_group(
+                county_id=county_id, **common
+            )
+            total = sum(r["keyUsers"] + r["sensitiveUsers"] for r in rows)
+            items = [
+                {
+                    "name": r["maintGroupName"],
+                    "id": r["maintGroupId"],
+                    "keyUsers": r["keyUsers"],
+                    "sensitiveUsers": r["sensitiveUsers"],
+                    "keyPercentage": round(r["keyUsers"] / total * 100, 1) if total else 0,
+                    "sensitivePercentage": round(r["sensitiveUsers"] / total * 100, 1) if total else 0,
+                }
+                for r in rows
+            ]
+        else:
+            rows = county_repository.stats_by_county(city_id=city_id, **common)
+            summary = {
+                "totalUsers": sum(r["totalUsers"] for r in rows),
+                "keyUsers": sum(r["keyUsers"] for r in rows),
+                "sensitiveUsers": sum(r["sensitiveUsers"] for r in rows),
+                "normalUsers": sum(r["normalUsers"] for r in rows),
+            }
+            total = summary["keyUsers"] + summary["sensitiveUsers"]
+            items = [
+                {
+                    "name": r["countyName"],
+                    "id": r["countyId"],
+                    "totalUsers": r["totalUsers"],
+                    "keyUsers": r["keyUsers"],
+                    "sensitiveUsers": r["sensitiveUsers"],
+                    "normalUsers": r["normalUsers"],
+                    "keyPercentage": round(r["keyUsers"] / total * 100, 1) if total else 0,
+                    "sensitivePercentage": round(r["sensitiveUsers"] / total * 100, 1) if total else 0,
+                }
+                for r in rows
+            ]
     except Exception:
         current_app.logger.exception("Failed to query county stats")
         return error("Failed to query county stats", 500)
 
-    return success({
-        "summary": {
-            "totalUsers": sum(r["totalUsers"] for r in rows),
-            "keyUsers": sum(r["keyUsers"] for r in rows),
-            "sensitiveUsers": sum(r["sensitiveUsers"] for r in rows),
-            "normalUsers": sum(r["normalUsers"] for r in rows),
-        },
-        "list": rows,
-    })
+    return success({"summary": summary, "list": items})
 
 
 @county_bp.route("/detail-stats", methods=["POST"])
@@ -178,8 +208,8 @@ def county_user_list():
         return err
 
     user_level = req_data.get("userLevel")
-    if user_level not in (None, "", "all", "key", "sensitive"):
-        return error("userLevel must be one of all/key/sensitive", 400)
+    if user_level not in (None, "", "all", "key", "sensitive", "key_sensitive"):
+        return error("userLevel must be one of all/key/sensitive/key_sensitive", 400)
     if user_level == "all" or not user_level:
         user_level = None
 
@@ -209,6 +239,7 @@ def county_user_list():
             "countyName": row.get("rdtCountyName", ""),
             "tradeName": row.get("tradeName", ""),
             "outageNature": row.get("outageNature", ""),
+            "outageNumber": row.get("outageNumber", ""),
             "isKeyUser": row.get("isKeyUser", False),
             "isSensitiveUser": row.get("isSensitiveUser", False),
         }
@@ -221,3 +252,280 @@ def county_user_list():
         "perPage": per_page,
         "list": users,
     })
+
+
+@county_bp.route("/user-outage-stats", methods=["POST"])
+def county_user_outage_stats():
+    req_data = _json_body()
+    begin_time, end_time, err = _require_time_range(req_data)
+    if err:
+        return err
+
+    outage_count = req_data.get("outageCount")
+    if outage_count is not None:
+        outage_count = str(outage_count).strip()
+        if outage_count not in ("1", "2", "3+"):
+            return error("outageCount must be one of 1/2/3+", 400)
+    else:
+        outage_count = None
+
+    page, per_page, err = _parse_pagination(req_data)
+    if err:
+        return err
+
+    try:
+        rows, total = county_repository.query_user_outage_stats(
+            page=page,
+            per_page=per_page,
+            rdt_county_id=_optional_str(req_data.get("countyId")),
+            keyword=_optional_str(req_data.get("keyword")),
+            outage_count_filter=outage_count,
+            begin_time=begin_time,
+            end_time=end_time,
+        )
+    except Exception:
+        current_app.logger.exception("Failed to query user outage stats")
+        return error("Failed to query user outage stats", 500)
+
+    users = [
+        {
+            "consNo": row.get("consNo", ""),
+            "consName": row.get("consName", ""),
+            "countyName": row.get("countyName", ""),
+            "tradeName": row.get("tradeName", ""),
+            "outageCount": row.get("outageCount", 0),
+        }
+        for row in rows
+    ]
+
+    return success({
+        "total": total,
+        "page": page,
+        "perPage": per_page,
+        "list": users,
+    })
+
+
+@county_bp.route("/trend", methods=["POST"])
+def county_trend():
+    req_data = _json_body()
+    begin_time, end_time, err = _require_time_range(req_data)
+    if err:
+        return err
+
+    try:
+        points = county_repository.trend_by_time(
+            begin_time=begin_time,
+            end_time=end_time,
+            rdt_county_id=_optional_str(req_data.get("countyId")),
+        )
+    except ValueError as e:
+        return error(str(e), 400)
+    except Exception:
+        current_app.logger.exception("Failed to query trend data")
+        return error("Failed to query trend data", 500)
+
+    return success({"points": points})
+
+
+@county_bp.route("/outage-freq", methods=["POST"])
+def county_outage_freq():
+    req_data = _json_body()
+    begin_time, end_time, err = _require_time_range(req_data)
+    if err:
+        return err
+
+    county_id = _optional_str(req_data.get("countyId"))
+    common = {
+        "begin_time": begin_time,
+        "end_time": end_time,
+        "rdt_county_id": county_id,
+        **_snapshot_filters(req_data),
+    }
+
+    try:
+        key_rows = county_repository.outage_freq_distribution(user_level="key", **common)
+        sensitive_rows = county_repository.outage_freq_distribution(user_level="sensitive", **common)
+    except Exception:
+        current_app.logger.exception("Failed to query outage frequency")
+        return error("Failed to query outage frequency", 500)
+
+    def build_distribution(rows):
+        bucket_map = {r["bucket"]: r["userCount"] for r in rows}
+        buckets = [
+            {"label": "停电1次", "count": bucket_map.get("1", 0)},
+            {"label": "停电2次", "count": bucket_map.get("2", 0)},
+            {"label": "停电3次及以上", "count": bucket_map.get("3+", 0)},
+        ]
+        total = sum(b["count"] for b in buckets)
+        for b in buckets:
+            b["percentage"] = round(b["count"] / total * 100, 1) if total else 0
+        return {"total": total, "distribution": buckets}
+
+    return success({
+        "keyUsers": build_distribution(key_rows),
+        "sensitiveUsers": build_distribution(sensitive_rows),
+    })
+
+
+@county_bp.route("/equipment-stats", methods=["POST"])
+def county_equipment_stats():
+    req_data = _json_body()
+    begin_time, end_time, err = _require_time_range(req_data)
+    if err:
+        return err
+
+    city_id = _optional_str(req_data.get("cityId"))
+    county_id = _optional_str(req_data.get("countyId"))
+    if city_id and county_id:
+        return error("cityId and countyId are mutually exclusive", 400)
+
+    try:
+        result = county_repository.equipment_impact_stats(
+            begin_time=begin_time,
+            end_time=end_time,
+            city_id=city_id,
+            county_id=county_id,
+            **_snapshot_filters(req_data),
+        )
+    except Exception:
+        current_app.logger.exception("Failed to query equipment stats")
+        return error("Failed to query equipment stats", 500)
+
+    return success(result)
+
+
+@county_bp.route("/equipment-list", methods=["POST"])
+def county_equipment_list():
+    req_data = _json_body()
+    begin_time, end_time, err = _require_time_range(req_data)
+    if err:
+        return err
+
+    city_id = _optional_str(req_data.get("cityId"))
+    county_id = _optional_str(req_data.get("countyId"))
+    if city_id and county_id:
+        return error("cityId and countyId are mutually exclusive", 400)
+
+    top = req_data.get("top")
+    if top is not None:
+        try:
+            top = int(top)
+            if top < 1:
+                return error("top must be greater than 0", 400)
+        except (TypeError, ValueError):
+            return error("top must be a positive integer", 400)
+
+    try:
+        rows = county_repository.equipment_impact_list(
+            begin_time=begin_time,
+            end_time=end_time,
+            city_id=city_id,
+            county_id=county_id,
+            top=top,
+            **_snapshot_filters(req_data),
+        )
+    except Exception:
+        current_app.logger.exception("Failed to query equipment list")
+        return error("Failed to query equipment list", 500)
+
+    return success({"list": rows})
+
+
+@county_bp.route("/equipment-page", methods=["POST"])
+def county_equipment_page():
+    req_data = _json_body()
+    begin_time, end_time, err = _require_time_range(req_data)
+    if err:
+        return err
+
+    city_id = _optional_str(req_data.get("cityId"))
+    county_id = _optional_str(req_data.get("countyId"))
+    if city_id and county_id:
+        return error("cityId and countyId are mutually exclusive", 400)
+
+    page, per_page, err = _parse_pagination(req_data)
+    if err:
+        return err
+
+    try:
+        rows, total = county_repository.equipment_impact_page(
+            page=page,
+            per_page=per_page,
+            begin_time=begin_time,
+            end_time=end_time,
+            city_id=city_id,
+            county_id=county_id,
+            **_snapshot_filters(req_data),
+        )
+    except Exception:
+        current_app.logger.exception("Failed to query equipment page")
+        return error("Failed to query equipment page", 500)
+
+    return success({
+        "total": total,
+        "page": page,
+        "perPage": per_page,
+        "list": rows,
+    })
+
+
+@county_bp.route("/equipment-detail", methods=["POST"])
+def county_equipment_detail():
+    req_data = _json_body()
+    equipment_id = _optional_str(req_data.get("equipmentId"))
+    if not equipment_id:
+        return error("equipmentId is required", 400)
+
+    try:
+        result = county_repository.equipment_detail(equipment_id)
+    except Exception:
+        current_app.logger.exception("Failed to query equipment detail")
+        return error("Failed to query equipment detail", 500)
+
+    return success(result)
+
+
+@county_bp.route("/user-detail", methods=["POST"])
+def county_user_detail():
+    req_data = _json_body()
+    cons_no = _optional_str(req_data.get("consNo"))
+    outage_number = _optional_str(req_data.get("outageNumber"))
+    if not cons_no or not outage_number:
+        return error("consNo and outageNumber are required", 400)
+
+    try:
+        result = county_repository.user_outage_detail(cons_no, outage_number)
+    except Exception:
+        current_app.logger.exception("Failed to query user detail")
+        return error("Failed to query user detail", 500)
+
+    return success(result)
+
+
+@county_bp.route("/user-outage-detail", methods=["POST"])
+def county_user_outage_detail():
+    req_data = _json_body()
+    begin_time, end_time, err = _require_time_range(req_data)
+    if err:
+        return err
+
+    cons_no = _optional_str(req_data.get("consNo"))
+    if not cons_no:
+        return error("consNo is required", 400)
+
+    try:
+        result = county_repository.user_outage_timeline(
+            cons_no=cons_no,
+            begin_time=begin_time,
+            end_time=end_time,
+            rdt_county_id=_optional_str(req_data.get("countyId")),
+        )
+    except Exception:
+        current_app.logger.exception("Failed to query user outage timeline")
+        return error("Failed to query user outage timeline", 500)
+
+    if not result:
+        return error("User not found", 404)
+
+    return success(result)
