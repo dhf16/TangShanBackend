@@ -248,6 +248,7 @@ def county_user_list():
             "countyName": row.get("rdtCountyName", ""),
             "tradeName": row.get("tradeName", ""),
             "outageNature": row.get("outageNature", ""),
+            "outageNumber": row.get("outageNumber", ""),
             "isKeyUser": row.get("isKeyUser", False),
             "isSensitiveUser": row.get("isSensitiveUser", False),
         }

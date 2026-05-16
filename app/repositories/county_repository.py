@@ -336,6 +336,7 @@ class CountyRepository:
           rdt_county_name AS rdtCountyName,
           trade_name AS tradeName,
           outage_nature AS outageNature,
+          outage_number AS outageNumber,
           is_key_user AS isKeyUser,
           is_sensitive_user AS isSensitiveUser
         FROM `{tbl}`

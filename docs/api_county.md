@@ -457,6 +457,7 @@ POST /api/county/user-list
         "countyName": "路南区",
         "tradeName": "大工业",
         "outageNature": "1",
+        "outageNumber": "OT20250101001",
         "isKeyUser": true,
         "isSensitiveUser": false
       },
@@ -466,6 +467,7 @@ POST /api/county/user-list
         "countyName": "路南区",
         "tradeName": "一般工商业",
         "outageNature": "2",
+        "outageNumber": "OT20250101002",
         "isKeyUser": true,
         "isSensitiveUser": true
       }
@@ -488,6 +490,7 @@ POST /api/county/user-list
 | data.list[].countyName | string | 所属区县名称 |
 | data.list[].tradeName | string | 所属行业名称 |
 | data.list[].outageNature | string | 停电性质编码 |
+| data.list[].outageNumber | string | 停电编号 |
 | data.list[].isKeyUser | bool | 是否关键用户 |
 | data.list[].isSensitiveUser | bool | 是否敏感用户 |
 
