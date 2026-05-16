@@ -392,7 +392,6 @@ POST /api/county/user-list
 | countyId | string | 否 | 区县 ID，不传则查全部区县 |
 | keyword | string | 否 | 搜索关键词，匹配用户名称、用户编号、停电编号 |
 | userLevel | string | 否 | 用户等级筛选，可选值：`all`、`key`、`sensitive`、`key_sensitive`（重点+敏感用户）。不传或传 `all` 表示不筛选 |
-| outageCount | string | 否 | 停电次数筛选，可选值：`1`、`2`、`3+`（3次及以上）。不传表示不按停电次数筛选 |
 | page | int | 否 | 页码，默认 1，最小 1 |
 | perPage | int | 否 | 每页条数，默认 20，范围 1-500 |
 | snapshotDate | string | 否 | 数据快照日期 |
@@ -421,19 +420,6 @@ POST /api/county/user-list
   "beginTime": "2025-01-01",
   "endTime": "2026-04-30",
   "keyword": "张",
-  "page": 1,
-  "perPage": 10
-}
-```
-
-按停电次数筛选（停电2次的重点用户）：
-
-```json
-{
-  "beginTime": "2025-01-01 00:00:00",
-  "endTime": "2026-04-30 23:59:59",
-  "userLevel": "key",
-  "outageCount": "2",
   "page": 1,
   "perPage": 10
 }
@@ -493,6 +479,111 @@ POST /api/county/user-list
 | data.list[].outageNumber | string | 停电编号 |
 | data.list[].isKeyUser | bool | 是否关键用户 |
 | data.list[].isSensitiveUser | bool | 是否敏感用户 |
+
+---
+
+## 4.5 用户停电统计（按用户去重）
+
+按用户编号去重，统计每个用户在指定时间范围内的停电次数，支持关键词搜索和停电次数筛选。
+
+```
+POST /api/county/user-outage-stats
+```
+
+### 请求参数
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| beginTime | string | **是** | 查询起始时间，格式 `YYYY-MM-DD` 或 `YYYY-MM-DD HH:mm:ss` |
+| endTime | string | **是** | 查询截止时间，格式同上 |
+| countyId | string | 否 | 区县 ID，不传则查全部区县 |
+| keyword | string | 否 | 搜索关键词，匹配用户名称、用户编号 |
+| outageCount | string | 否 | 停电次数筛选，可选值：`1`、`2`、`3+`（3次及以上）。不传表示不按停电次数筛选 |
+| page | int | 否 | 页码，默认 1，最小 1 |
+| perPage | int | 否 | 每页条数，默认 20，范围 1-500 |
+
+### 请求示例
+
+查询全部用户的停电统计：
+
+```json
+{
+  "beginTime": "2025-01-01 00:00:00",
+  "endTime": "2026-04-30 23:59:59",
+  "page": 1,
+  "perPage": 20
+}
+```
+
+按停电次数筛选（停电3次及以上的用户）：
+
+```json
+{
+  "beginTime": "2025-01-01 00:00:00",
+  "endTime": "2026-04-30 23:59:59",
+  "outageCount": "3+",
+  "page": 1,
+  "perPage": 10
+}
+```
+
+带关键词搜索：
+
+```json
+{
+  "beginTime": "2025-01-01",
+  "endTime": "2026-04-30",
+  "keyword": "张",
+  "page": 1,
+  "perPage": 10
+}
+```
+
+### 响应示例
+
+```json
+{
+  "code": 0,
+  "success": true,
+  "message": "ok",
+  "data": {
+    "total": 85,
+    "page": 1,
+    "perPage": 20,
+    "list": [
+      {
+        "consNo": "1234567890",
+        "consName": "唐山钢铁有限公司",
+        "countyName": "路南区",
+        "tradeName": "大工业",
+        "outageCount": 3
+      },
+      {
+        "consNo": "9876543210",
+        "consName": "路南医院",
+        "countyName": "路北区",
+        "tradeName": "一般工商业",
+        "outageCount": 1
+      }
+    ]
+  },
+  "timestamp": "2026-05-08T14:30:00+08:00"
+}
+```
+
+### 响应字段说明
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| data.total | int | 符合条件的总记录数 |
+| data.page | int | 当前页码 |
+| data.perPage | int | 每页条数 |
+| data.list | array | 用户停电统计列表，按停电次数降序 |
+| data.list[].consNo | string | 用户编号 |
+| data.list[].consName | string | 用户名称 |
+| data.list[].countyName | string | 所属区县名称 |
+| data.list[].tradeName | string | 所属行业名称 |
+| data.list[].outageCount | int | 停电次数 |
 
 ---
 
@@ -1042,6 +1133,84 @@ POST /api/county/user-detail
 
 ---
 
+## 12. 用户停电时间线
+
+根据用户编号查询该用户在指定时间范围内的所有停电事件，返回用户基本信息及每次停电的开始/复电时间。
+
+```
+POST /api/county/user-outage-detail
+```
+
+### 请求参数
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| beginTime | string | **是** | 查询起始时间，格式 `YYYY-MM-DD` 或 `YYYY-MM-DD HH:mm:ss` |
+| endTime | string | **是** | 查询截止时间，格式同上 |
+| consNo | string | **是** | 用户编号 |
+| countyId | string | 否 | 区县 ID，不传则不限制区县 |
+
+### 请求示例
+
+```json
+{
+  "beginTime": "2025-01-01 00:00:00",
+  "endTime": "2026-04-30 23:59:59",
+  "consNo": "1234567890"
+}
+```
+
+带区县筛选：
+
+```json
+{
+  "beginTime": "2025-01-01",
+  "endTime": "2026-04-30",
+  "consNo": "1234567890",
+  "countyId": "130203"
+}
+```
+
+### 响应示例
+
+```json
+{
+  "code": 0,
+  "success": true,
+  "message": "ok",
+  "data": {
+    "consNo": "1234567890",
+    "consName": "唐山钢铁有限公司",
+    "countyName": "路南区",
+    "tradeName": "大工业",
+    "consAddr": "唐山市路南区某某路123号",
+    "outageCount": 3,
+    "outages": [
+      { "beginTime": "2025-03-15 14:00:00", "endTime": "2025-03-15 16:30:00" },
+      { "beginTime": "2025-02-01 08:00:00", "endTime": "" },
+      { "beginTime": "2025-01-01 10:00:00", "endTime": "2025-01-01 12:00:00" }
+    ]
+  },
+  "timestamp": "2026-05-12T10:00:00+08:00"
+}
+```
+
+### 响应字段说明
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| data.consNo | string | 用户编号 |
+| data.consName | string | 用户名称 |
+| data.countyName | string | 所属区县名称 |
+| data.tradeName | string | 所属行业名称 |
+| data.consAddr | string | 用户地址 |
+| data.outageCount | int | 停电次数 |
+| data.outages | array | 停电事件列表，按开始时间降序 |
+| data.outages[].beginTime | string | 停电开始时间 |
+| data.outages[].endTime | string | 复电时间，为空字符串表示尚未复电 |
+
+---
+
 ## 参数校验规则
 
 | 场景 | 错误信息 | HTTP 状态码 |
@@ -1050,7 +1219,6 @@ POST /api/county/user-detail
 | beginTime 或 endTime 格式错误 | `beginTime format must be YYYY-MM-DD or YYYY-MM-DD HH:mm:ss` | 400 |
 | userLevel 值不合法 | `userLevel must be one of all/key/sensitive/key_sensitive` | 400 |
 | countyId 和 cityId 同时传入 | `countyId and cityId are mutually exclusive` | 400 |
-| outageCount 值不合法 | `outageCount must be one of 1/2/3+` | 400 |
 | page 或 perPage 不是整数 | `page and perPage must be integers` | 400 |
 | page < 1 | `page must be greater than or equal to 1` | 400 |
 | perPage 不在 1-500 范围 | `perPage must be between 1 and 500` | 400 |
