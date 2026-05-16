@@ -213,14 +213,6 @@ def county_user_list():
     if user_level == "all" or not user_level:
         user_level = None
 
-    outage_count = req_data.get("outageCount")
-    if outage_count is not None:
-        outage_count = str(outage_count).strip()
-        if outage_count not in ("1", "2", "3+"):
-            return error("outageCount must be one of 1/2/3+", 400)
-    else:
-        outage_count = None
-
     page, per_page, err = _parse_pagination(req_data)
     if err:
         return err
@@ -234,7 +226,6 @@ def county_user_list():
             rdt_county_id=_optional_str(req_data.get("countyId")),
             begin_time=begin_time,
             end_time=end_time,
-            outage_count_filter=outage_count,
             **_snapshot_filters(req_data),
         )
     except Exception:
@@ -250,6 +241,58 @@ def county_user_list():
             "outageNature": row.get("outageNature", ""),
             "isKeyUser": row.get("isKeyUser", False),
             "isSensitiveUser": row.get("isSensitiveUser", False),
+        }
+        for row in rows
+    ]
+
+    return success({
+        "total": total,
+        "page": page,
+        "perPage": per_page,
+        "list": users,
+    })
+
+
+@county_bp.route("/user-outage-stats", methods=["POST"])
+def county_user_outage_stats():
+    req_data = _json_body()
+    begin_time, end_time, err = _require_time_range(req_data)
+    if err:
+        return err
+
+    outage_count = req_data.get("outageCount")
+    if outage_count is not None:
+        outage_count = str(outage_count).strip()
+        if outage_count not in ("1", "2", "3+"):
+            return error("outageCount must be one of 1/2/3+", 400)
+    else:
+        outage_count = None
+
+    page, per_page, err = _parse_pagination(req_data)
+    if err:
+        return err
+
+    try:
+        rows, total = county_repository.query_user_outage_stats(
+            page=page,
+            per_page=per_page,
+            rdt_county_id=_optional_str(req_data.get("countyId")),
+            keyword=_optional_str(req_data.get("keyword")),
+            outage_count_filter=outage_count,
+            begin_time=begin_time,
+            end_time=end_time,
+        )
+    except Exception:
+        current_app.logger.exception("Failed to query user outage stats")
+        return error("Failed to query user outage stats", 500)
+
+    users = [
+        {
+            "consNo": row.get("consNo", ""),
+            "consName": row.get("consName", ""),
+            "countyName": row.get("countyName", ""),
+            "tradeName": row.get("tradeName", ""),
+            "outageCount": row.get("outageCount", 0),
         }
         for row in rows
     ]
@@ -455,5 +498,33 @@ def county_user_detail():
     except Exception:
         current_app.logger.exception("Failed to query user detail")
         return error("Failed to query user detail", 500)
+
+    return success(result)
+
+
+@county_bp.route("/user-outage-detail", methods=["POST"])
+def county_user_outage_detail():
+    req_data = _json_body()
+    begin_time, end_time, err = _require_time_range(req_data)
+    if err:
+        return err
+
+    cons_no = _optional_str(req_data.get("consNo"))
+    if not cons_no:
+        return error("consNo is required", 400)
+
+    try:
+        result = county_repository.user_outage_timeline(
+            cons_no=cons_no,
+            begin_time=begin_time,
+            end_time=end_time,
+            rdt_county_id=_optional_str(req_data.get("countyId")),
+        )
+    except Exception:
+        current_app.logger.exception("Failed to query user outage timeline")
+        return error("Failed to query user outage timeline", 500)
+
+    if not result:
+        return error("User not found", 404)
 
     return success(result)

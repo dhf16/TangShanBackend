@@ -264,7 +264,6 @@ class CountyRepository:
         end_time=None,
         sort_by="updated_at",
         sort_order="desc",
-        outage_count_filter=None,
     ):
         allowed_sort = {
             "id", "created_at", "updated_at",
@@ -286,45 +285,8 @@ class CountyRepository:
 
         tbl = self.user_score_table
 
-        if outage_count_filter:
-            sub_where, sub_params = self._build_where_clause(
-                user_level=user_level,
-                rdt_county_id=rdt_county_id,
-                snapshot_date=snapshot_date,
-                snapshot_start_date=snapshot_start_date,
-                snapshot_end_date=snapshot_end_date,
-                begin_time=begin_time,
-                end_time=end_time,
-            )
-            if outage_count_filter == "3+":
-                having = "HAVING COUNT(*) >= 3"
-            else:
-                having = "HAVING COUNT(*) = :_outage_cnt"
-                sub_params["_outage_cnt"] = int(outage_count_filter)
-            sub_sql = (
-                f"SELECT cons_no, COUNT(*) AS cnt FROM `{tbl}` {sub_where} "
-                f"GROUP BY cons_no {having}"
-            )
-            cons_no_rows = self._fetch_all(sub_sql, sub_params)
-            if not cons_no_rows:
-                return [], 0
-
-            in_ph = []
-            for i, r in enumerate(cons_no_rows):
-                key = f"_oc_{i}"
-                in_ph.append(f":{key}")
-                params[key] = r["cons_no"]
-            where_sql += f" AND cons_no IN ({', '.join(in_ph)})"
-
-            # 无 keyword 时直接从子查询结果算 total，省掉 COUNT 查询
-            if not keyword:
-                total = sum(int(r.get("cnt", 0)) for r in cons_no_rows)
-            else:
-                count_sql = f"SELECT COUNT(*) AS total FROM `{tbl}` {where_sql}"
-                total = int(self._fetch_one(count_sql, params).get("total", 0))
-        else:
-            count_sql = f"SELECT COUNT(*) AS total FROM `{tbl}` {where_sql}"
-            total = int(self._fetch_one(count_sql, params).get("total", 0))
+        count_sql = f"SELECT COUNT(*) AS total FROM `{tbl}` {where_sql}"
+        total = int(self._fetch_one(count_sql, params).get("total", 0))
 
         offset = (page - 1) * per_page
 
@@ -348,6 +310,68 @@ class CountyRepository:
         for row in rows:
             row["isKeyUser"] = bool(row.get("isKeyUser"))
             row["isSensitiveUser"] = bool(row.get("isSensitiveUser"))
+
+        return rows, total
+
+    def query_user_outage_stats(
+        self,
+        page,
+        per_page,
+        rdt_county_id=None,
+        keyword=None,
+        outage_count_filter=None,
+        begin_time=None,
+        end_time=None,
+    ):
+        where_parts, params = self._time_filters(begin_time, end_time)
+
+        if rdt_county_id:
+            where_parts.append("rdt_county_id = :rdt_county_id")
+            params["rdt_county_id"] = rdt_county_id
+
+        if keyword:
+            where_parts.append("(cons_name LIKE :kw OR cons_no LIKE :kw)")
+            params["kw"] = f"%{keyword}%"
+
+        where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+        having_sql = ""
+        if outage_count_filter:
+            if outage_count_filter == "3+":
+                having_sql = "HAVING COUNT(*) >= 3"
+            else:
+                having_sql = "HAVING COUNT(*) = :_outage_cnt"
+                params["_outage_cnt"] = int(outage_count_filter)
+
+        tbl = self.user_score_table
+
+        count_sql = (
+            f"SELECT COUNT(*) AS total FROM ("
+            f"SELECT cons_no FROM `{tbl}` {where_sql} "
+            f"GROUP BY cons_no {having_sql}"
+            f") sub"
+        )
+        total = int(self._fetch_one(count_sql, params).get("total", 0))
+
+        offset = (page - 1) * per_page
+        list_params = {**params, "_limit": per_page, "_offset": offset}
+        list_sql = f"""
+        SELECT
+          cons_no AS consNo,
+          IFNULL(MAX(cons_name), '') AS consName,
+          IFNULL(MAX(rdt_county_name), '') AS countyName,
+          IFNULL(MAX(trade_name), '') AS tradeName,
+          COUNT(*) AS outageCount
+        FROM `{tbl}`
+        {where_sql}
+        GROUP BY cons_no
+        {having_sql}
+        ORDER BY outageCount DESC
+        LIMIT :_limit OFFSET :_offset
+        """
+        rows = self._fetch_all(list_sql, list_params)
+        for row in rows:
+            row["outageCount"] = int(row.get("outageCount") or 0)
 
         return rows, total
 
@@ -613,6 +637,51 @@ class CountyRepository:
         """
         row = self._fetch_one(sql, {"cons_no": cons_no, "outage_number": outage_number})
         return row if row and row.get("consNo") else None
+
+    def user_outage_timeline(self, cons_no, begin_time, end_time, rdt_county_id=None):
+        tbl = self.user_score_table
+
+        info_sql = f"""
+        SELECT
+          cons_no AS consNo,
+          IFNULL(cons_name, '') AS consName,
+          IFNULL(rdt_county_name, '') AS countyName,
+          IFNULL(trade_name, '') AS tradeName,
+          IFNULL(cons_addr, '') AS consAddr
+        FROM `{tbl}`
+        WHERE cons_no = :cons_no
+        LIMIT 1
+        """
+        info = self._fetch_one(info_sql, {"cons_no": cons_no})
+        if not info or not info.get("consNo"):
+            return None
+
+        where_parts = [
+            "cons_no = :cons_no",
+            "`begin_time` >= :begin_time",
+            "`begin_time` <= :end_time",
+        ]
+        params = {"cons_no": cons_no, "begin_time": begin_time, "end_time": end_time}
+        if rdt_county_id:
+            where_parts.append("rdt_county_id = :rdt_county_id")
+            params["rdt_county_id"] = rdt_county_id
+        where_sql = "WHERE " + " AND ".join(where_parts)
+
+        outages_sql = f"""
+        SELECT
+          IFNULL(begin_time, '') AS beginTime,
+          IFNULL(end_time, '') AS endTime
+        FROM `{tbl}`
+        {where_sql}
+        ORDER BY begin_time DESC
+        """
+        outages = self._fetch_all(outages_sql, params)
+
+        return {
+            **info,
+            "outageCount": len(outages),
+            "outages": outages,
+        }
 
     def bar_chart_by_maint_group(
         self, county_id, begin_time=None, end_time=None,
