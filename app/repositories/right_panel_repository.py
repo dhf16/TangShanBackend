@@ -13,6 +13,8 @@ _POOL_DEFAULTS = {
     "maxconnections": 20,
 }
 
+DEFAULT_WARNING_CITY_ID = "1100F3DE22316FADE050007F01006CBE"
+
 
 class RightPanelRepository:
     def __init__(self, app=None):
@@ -73,6 +75,7 @@ class RightPanelRepository:
         begin_time,
         end_time,
         county_id=None,
+        city_id=None,
         snapshot_date=None,
         snapshot_start_date=None,
         snapshot_end_date=None,
@@ -99,6 +102,7 @@ class RightPanelRepository:
             "countyWarnings": self.county_warnings(
                 begin_time,
                 end_time,
+                city_id=city_id,
                 snapshot_date=snapshot_date,
                 snapshot_start_date=snapshot_start_date,
                 snapshot_end_date=snapshot_end_date,
@@ -125,6 +129,7 @@ class RightPanelRepository:
         self,
         begin_time,
         end_time,
+        city_id=None,
         snapshot_date=None,
         snapshot_start_date=None,
         snapshot_end_date=None,
@@ -137,6 +142,7 @@ class RightPanelRepository:
             snapshot_end_date=snapshot_end_date,
         )
         event_sql = self._event_summary_sql(where_sql)
+        warning_city_id = city_id or DEFAULT_WARNING_CITY_ID
         rows = self._fetch_all(
             f"""
             SELECT
@@ -146,10 +152,11 @@ class RightPanelRepository:
               SUM(CASE WHEN e.isRestored = 0 THEN 1 ELSE 0 END) AS activeEvents
             FROM county c
             LEFT JOIN ({event_sql}) e ON c.county_id = e.countyId
+            WHERE c.city_id = :warning_city_id
             GROUP BY c.county_id, c.county_name, c.id
             ORDER BY c.id
             """,
-            params,
+            {**params, "warning_city_id": warning_city_id},
         )
         return [
             {

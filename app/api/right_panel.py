@@ -81,6 +81,7 @@ def right_panel_overview():
             begin_time=begin_time,
             end_time=end_time,
             county_id=_optional_str(req_data.get("countyId")),
+            city_id=_optional_str(req_data.get("cityId")),
             **_snapshot_filters(req_data),
         )
     except Exception:
