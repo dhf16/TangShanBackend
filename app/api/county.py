@@ -7,7 +7,9 @@ from app.repositories.county_repository import county_repository
 
 county_bp = Blueprint("county", __name__, url_prefix="/county")
 
-_DATETIME_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d")
+_DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
+_DATE_FORMAT = "%Y-%m-%d"
+_DATETIME_FORMATS = (_DATETIME_FORMAT, _DATE_FORMAT)
 
 
 def _json_body():
@@ -18,16 +20,33 @@ def _optional_str(value):
     return str(value or "").strip() or None
 
 
-def _validate_datetime(value, field_name):
+def _parse_datetime(value, field_name, end_of_day=False):
     if value is None:
-        return None, None
+        return None, None, None
+    value = str(value).strip()
     for fmt in _DATETIME_FORMATS:
         try:
-            datetime.strptime(value, fmt)
-            return value, None
+            parsed = datetime.strptime(value, fmt)
+            if fmt == _DATE_FORMAT:
+                if end_of_day:
+                    parsed = parsed.replace(hour=23, minute=59, second=59)
+                else:
+                    parsed = parsed.replace(hour=0, minute=0, second=0)
+            return parsed.strftime(_DATETIME_FORMAT), parsed, None
         except (ValueError, TypeError):
             continue
-    return None, error(f"{field_name} format must be YYYY-MM-DD or YYYY-MM-DD HH:mm:ss", 400)
+    return None, None, error(f"{field_name} format must be YYYY-MM-DD or YYYY-MM-DD HH:mm:ss", 400)
+
+
+def _validate_date(value, field_name):
+    if value in (None, ""):
+        return None, None, None
+    value = str(value).strip()
+    try:
+        parsed = datetime.strptime(value, _DATE_FORMAT)
+        return parsed.strftime(_DATE_FORMAT), parsed, None
+    except (ValueError, TypeError):
+        return None, None, error(f"{field_name} format must be YYYY-MM-DD", 400)
 
 
 def _require_time_range(req_data):
@@ -36,12 +55,14 @@ def _require_time_range(req_data):
     if not begin_time or not end_time:
         return None, None, error("beginTime and endTime are required", 400)
 
-    begin_time, err = _validate_datetime(begin_time, "beginTime")
+    begin_time, begin_dt, err = _parse_datetime(begin_time, "beginTime")
     if err:
         return None, None, err
-    end_time, err = _validate_datetime(end_time, "endTime")
+    end_time, end_dt, err = _parse_datetime(end_time, "endTime", end_of_day=True)
     if err:
         return None, None, err
+    if begin_dt > end_dt:
+        return None, None, error("beginTime must be earlier than or equal to endTime", 400)
 
     return begin_time, end_time, None
 
@@ -62,11 +83,27 @@ def _parse_pagination(req_data):
 
 
 def _snapshot_filters(req_data):
+    snapshot_date, _, err = _validate_date(req_data.get("snapshotDate"), "snapshotDate")
+    if err:
+        return None, err
+    snapshot_start_date, start_dt, err = _validate_date(
+        req_data.get("snapshotStartDate"), "snapshotStartDate"
+    )
+    if err:
+        return None, err
+    snapshot_end_date, end_dt, err = _validate_date(
+        req_data.get("snapshotEndDate"), "snapshotEndDate"
+    )
+    if err:
+        return None, err
+    if start_dt and end_dt and start_dt > end_dt:
+        return None, error("snapshotStartDate must be earlier than or equal to snapshotEndDate", 400)
+
     return {
-        "snapshot_date": req_data.get("snapshotDate"),
-        "snapshot_start_date": req_data.get("snapshotStartDate"),
-        "snapshot_end_date": req_data.get("snapshotEndDate"),
-    }
+        "snapshot_date": snapshot_date,
+        "snapshot_start_date": snapshot_start_date,
+        "snapshot_end_date": snapshot_end_date,
+    }, None
 
 
 @county_bp.route("/list", methods=["POST"])
@@ -94,11 +131,14 @@ def county_stats():
     city_id = _optional_str(req_data.get("cityId"))
     if county_id and city_id:
         return error("countyId and cityId are mutually exclusive", 400)
+    snapshot_filters, err = _snapshot_filters(req_data)
+    if err:
+        return err
 
     common = {
         "begin_time": begin_time,
         "end_time": end_time,
-        **_snapshot_filters(req_data),
+        **snapshot_filters,
     }
 
     try:
@@ -159,13 +199,16 @@ def county_detail_stats():
     city_id = _optional_str(req_data.get("cityId"))
     if county_id and city_id:
         return error("countyId and cityId are mutually exclusive", 400)
+    snapshot_filters, err = _snapshot_filters(req_data)
+    if err:
+        return err
 
     common = {
         "rdt_county_id": county_id,
         "city_id": city_id,
         "begin_time": begin_time,
         "end_time": end_time,
-        **_snapshot_filters(req_data),
+        **snapshot_filters,
     }
 
     try:
@@ -223,6 +266,9 @@ def county_user_list():
     city_id = _optional_str(req_data.get("cityId"))
     if county_id and city_id:
         return error("countyId and cityId are mutually exclusive", 400)
+    snapshot_filters, err = _snapshot_filters(req_data)
+    if err:
+        return err
 
     page, per_page, err = _parse_pagination(req_data)
     if err:
@@ -238,7 +284,7 @@ def county_user_list():
             city_id=city_id,
             begin_time=begin_time,
             end_time=end_time,
-            **_snapshot_filters(req_data),
+            **snapshot_filters,
         )
     except Exception:
         current_app.logger.exception("Failed to query user list")
@@ -247,6 +293,7 @@ def county_user_list():
     users = [
         {
             "consNo": row.get("consNo", ""),
+            "outageNumber": row.get("outageNumber", ""),
             "consName": row.get("consName", ""),
             "countyName": row.get("rdtCountyName", ""),
             "tradeName": row.get("tradeName", ""),
@@ -363,13 +410,16 @@ def county_outage_freq():
     city_id = _optional_str(req_data.get("cityId"))
     if county_id and city_id:
         return error("countyId and cityId are mutually exclusive", 400)
+    snapshot_filters, err = _snapshot_filters(req_data)
+    if err:
+        return err
 
     common = {
         "begin_time": begin_time,
         "end_time": end_time,
         "rdt_county_id": county_id,
         "city_id": city_id,
-        **_snapshot_filters(req_data),
+        **snapshot_filters,
     }
 
     try:
@@ -408,6 +458,9 @@ def county_equipment_stats():
     county_id = _optional_str(req_data.get("countyId"))
     if city_id and county_id:
         return error("cityId and countyId are mutually exclusive", 400)
+    snapshot_filters, err = _snapshot_filters(req_data)
+    if err:
+        return err
 
     try:
         result = county_repository.equipment_impact_stats(
@@ -415,7 +468,7 @@ def county_equipment_stats():
             end_time=end_time,
             city_id=city_id,
             county_id=county_id,
-            **_snapshot_filters(req_data),
+            **snapshot_filters,
         )
     except Exception:
         current_app.logger.exception("Failed to query equipment stats")
@@ -435,6 +488,9 @@ def county_equipment_list():
     county_id = _optional_str(req_data.get("countyId"))
     if city_id and county_id:
         return error("cityId and countyId are mutually exclusive", 400)
+    snapshot_filters, err = _snapshot_filters(req_data)
+    if err:
+        return err
 
     top = req_data.get("top")
     if top is not None:
@@ -452,7 +508,7 @@ def county_equipment_list():
             city_id=city_id,
             county_id=county_id,
             top=top,
-            **_snapshot_filters(req_data),
+            **snapshot_filters,
         )
     except Exception:
         current_app.logger.exception("Failed to query equipment list")
@@ -472,6 +528,9 @@ def county_equipment_page():
     county_id = _optional_str(req_data.get("countyId"))
     if city_id and county_id:
         return error("cityId and countyId are mutually exclusive", 400)
+    snapshot_filters, err = _snapshot_filters(req_data)
+    if err:
+        return err
 
     page, per_page, err = _parse_pagination(req_data)
     if err:
@@ -485,7 +544,7 @@ def county_equipment_page():
             end_time=end_time,
             city_id=city_id,
             county_id=county_id,
-            **_snapshot_filters(req_data),
+            **snapshot_filters,
         )
     except Exception:
         current_app.logger.exception("Failed to query equipment page")
@@ -511,6 +570,8 @@ def county_equipment_detail():
     except Exception:
         current_app.logger.exception("Failed to query equipment detail")
         return error("Failed to query equipment detail", 500)
+    if not result:
+        return error("Equipment not found", 404)
 
     return success(result)
 
@@ -528,6 +589,8 @@ def county_user_detail():
     except Exception:
         current_app.logger.exception("Failed to query user detail")
         return error("Failed to query user detail", 500)
+    if not result:
+        return error("User outage not found", 404)
 
     return success(result)
 

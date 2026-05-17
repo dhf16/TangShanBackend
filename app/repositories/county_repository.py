@@ -33,6 +33,8 @@ def _build_time_segments(begin_time, end_time, num_segments=_NUM_SEGMENTS):
     if dt_begin is None or dt_end is None:
         raise ValueError("Invalid datetime format")
     total = (dt_end - dt_begin).total_seconds()
+    if total <= 0:
+        raise ValueError("endTime must be later than beginTime")
     seg_seconds = total / num_segments
     boundaries = []
     labels = []
@@ -129,9 +131,7 @@ class CountyRepository:
             begin_time, end_time, snapshot_date, snapshot_start_date, snapshot_end_date
         )
         if city_id:
-            where_parts.append(
-                "rdt_county_id IN (SELECT county_id FROM county WHERE city_id = :city_id)"
-            )
+            where_parts.append("rdt_city_id = :city_id")
             params["city_id"] = city_id
         where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
@@ -139,10 +139,12 @@ class CountyRepository:
         SELECT
           IFNULL(rdt_county_id, '') AS countyId,
           IFNULL(rdt_county_name, '') AS countyName,
-          COUNT(*) AS totalUsers,
-          SUM(CASE WHEN is_key_user = 1 THEN 1 ELSE 0 END) AS keyUsers,
-          SUM(CASE WHEN is_sensitive_user = 1 THEN 1 ELSE 0 END) AS sensitiveUsers,
-          SUM(CASE WHEN is_key_user = 0 THEN 1 ELSE 0 END) AS normalUsers
+          COUNT(DISTINCT NULLIF(cons_no, '')) AS totalUsers,
+          COUNT(DISTINCT CASE WHEN is_key_user = 1 THEN NULLIF(cons_no, '') END) AS keyUsers,
+          COUNT(DISTINCT CASE WHEN is_sensitive_user = 1 THEN NULLIF(cons_no, '') END) AS sensitiveUsers,
+          COUNT(DISTINCT CASE
+            WHEN is_key_user = 0 AND is_sensitive_user = 0 THEN NULLIF(cons_no, '')
+          END) AS normalUsers
         FROM `{self.user_score_table}`
         {where_sql}
         GROUP BY rdt_county_id, rdt_county_name
@@ -174,10 +176,12 @@ class CountyRepository:
 
         sql = f"""
         SELECT
-          COUNT(*) AS totalUsers,
-          SUM(CASE WHEN is_key_user = 1 THEN 1 ELSE 0 END) AS keyUsers,
-          SUM(CASE WHEN is_sensitive_user = 1 THEN 1 ELSE 0 END) AS sensitiveUsers,
-          SUM(CASE WHEN is_key_user = 0 THEN 1 ELSE 0 END) AS normalUsers
+          COUNT(DISTINCT NULLIF(cons_no, '')) AS totalUsers,
+          COUNT(DISTINCT CASE WHEN is_key_user = 1 THEN NULLIF(cons_no, '') END) AS keyUsers,
+          COUNT(DISTINCT CASE WHEN is_sensitive_user = 1 THEN NULLIF(cons_no, '') END) AS sensitiveUsers,
+          COUNT(DISTINCT CASE
+            WHEN is_key_user = 0 AND is_sensitive_user = 0 THEN NULLIF(cons_no, '')
+          END) AS normalUsers
         FROM `{self.user_score_table}`
         {where_sql}
         """
@@ -214,7 +218,7 @@ class CountyRepository:
         SELECT
           IFNULL(trade_type, '') AS tradeType,
           IFNULL(trade_name, '') AS tradeName,
-          COUNT(*) AS userCount
+          COUNT(DISTINCT NULLIF(cons_no, '')) AS userCount
         FROM `{self.user_score_table}`
         {where_sql}
         GROUP BY trade_type, trade_name
@@ -246,7 +250,7 @@ class CountyRepository:
         sql = f"""
         SELECT
           IFNULL(outage_nature, '') AS outageNature,
-          COUNT(*) AS userCount
+          COUNT(DISTINCT NULLIF(cons_no, '')) AS userCount
         FROM `{self.user_score_table}`
         {where_sql}
         GROUP BY outage_nature
@@ -300,6 +304,7 @@ class CountyRepository:
         list_sql = f"""
         SELECT
           cons_no AS consNo,
+          outage_number AS outageNumber,
           cons_name AS consName,
           rdt_county_name AS rdtCountyName,
           trade_name AS tradeName,
@@ -349,9 +354,9 @@ class CountyRepository:
         having_sql = ""
         if outage_count_filter:
             if outage_count_filter == "3+":
-                having_sql = "HAVING COUNT(*) >= 3"
+                having_sql = "HAVING COUNT(DISTINCT NULLIF(outage_number, '')) >= 3"
             else:
-                having_sql = "HAVING COUNT(*) = :_outage_cnt"
+                having_sql = "HAVING COUNT(DISTINCT NULLIF(outage_number, '')) = :_outage_cnt"
                 params["_outage_cnt"] = int(outage_count_filter)
 
         tbl = self.user_score_table
@@ -372,7 +377,7 @@ class CountyRepository:
           IFNULL(MAX(cons_name), '') AS consName,
           IFNULL(MAX(rdt_county_name), '') AS countyName,
           IFNULL(MAX(trade_name), '') AS tradeName,
-          COUNT(*) AS outageCount
+          COUNT(DISTINCT NULLIF(outage_number, '')) AS outageCount
         FROM `{tbl}`
         {where_sql}
         GROUP BY cons_no
@@ -389,46 +394,41 @@ class CountyRepository:
     def trend_by_time(self, begin_time, end_time, rdt_county_id=None, city_id=None):
         boundaries, labels = _build_time_segments(begin_time, end_time)
 
-        whens = []
-        params = {
-            "filter_begin_time": begin_time,
-            "filter_end_time": end_time,
-        }
+        params = {}
+        base_parts = []
+        if rdt_county_id:
+            base_parts.append("rdt_county_id = :rdt_county_id")
+            params["rdt_county_id"] = rdt_county_id
+        if city_id:
+            base_parts.append("rdt_city_id = :city_id")
+            params["city_id"] = city_id
+
+        tbl = self.user_score_table
+        selects = []
         for i, (seg_start, seg_end) in enumerate(boundaries, 1):
-            op = "<=" if i == len(boundaries) else "<"
-            whens.append(
-                f"WHEN `begin_time` >= :seg_start_{i} AND `begin_time` {op} :seg_end_{i} "
-                f"THEN :label_{i}"
-            )
+            begin_op = "<=" if i == len(boundaries) else "<"
             params[f"seg_start_{i}"] = seg_start.strftime("%Y-%m-%d %H:%M:%S")
             params[f"seg_end_{i}"] = seg_end.strftime("%Y-%m-%d %H:%M:%S")
             params[f"label_{i}"] = labels[i - 1]
+            segment_parts = [
+                *base_parts,
+                f"`begin_time` {begin_op} :seg_end_{i}",
+                (
+                    "COALESCE(NULLIF(CAST(`end_time` AS CHAR), ''), "
+                    f"'9999-12-31 23:59:59') >= :seg_start_{i}"
+                ),
+            ]
+            where_sql = "WHERE " + " AND ".join(segment_parts)
+            selects.append(f"""
+            SELECT
+              :label_{i} AS timePoint,
+              COUNT(DISTINCT CASE WHEN is_key_user = 1 THEN NULLIF(cons_no, '') END) AS keyUsers,
+              COUNT(DISTINCT CASE WHEN is_sensitive_user = 1 THEN NULLIF(cons_no, '') END) AS sensitiveUsers
+            FROM `{tbl}`
+            {where_sql}
+            """)
 
-        case_sql = "CASE " + " ".join(whens) + " END"
-
-        where_parts = [
-            "`begin_time` >= :filter_begin_time",
-            "`begin_time` <= :filter_end_time",
-        ]
-        if rdt_county_id:
-            where_parts.append("rdt_county_id = :rdt_county_id")
-            params["rdt_county_id"] = rdt_county_id
-        if city_id:
-            where_parts.append("rdt_city_id = :city_id")
-            params["city_id"] = city_id
-        where_sql = "WHERE " + " AND ".join(where_parts)
-
-        tbl = self.user_score_table
-        sql = f"""
-        SELECT
-          {case_sql} AS timePoint,
-          SUM(CASE WHEN is_key_user = 1 THEN 1 ELSE 0 END) AS keyUsers,
-          SUM(CASE WHEN is_sensitive_user = 1 THEN 1 ELSE 0 END) AS sensitiveUsers
-        FROM `{tbl}`
-        {where_sql}
-        GROUP BY timePoint
-        ORDER BY timePoint ASC
-        """
+        sql = " UNION ALL ".join(selects)
         rows = self._fetch_all(sql, params)
 
         result_map = {r["timePoint"]: r for r in rows}
@@ -455,13 +455,12 @@ class CountyRepository:
             begin_time, end_time, snapshot_date, snapshot_start_date, snapshot_end_date
         )
         if city_id:
-            where_parts.append(
-                "rdt_county_id IN (SELECT county_id FROM county WHERE city_id = :city_id)"
-            )
+            where_parts.append("rdt_city_id = :city_id")
             params["city_id"] = city_id
         if county_id:
             where_parts.append("rdt_county_id = :county_id")
             params["county_id"] = county_id
+        where_parts.append("equipment_id IS NOT NULL AND equipment_id <> ''")
         where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
         tbl = self.user_score_table
@@ -477,12 +476,13 @@ class CountyRepository:
         stats = self._fetch_one(stats_sql, params)
         total_equip = int(stats.get("equipmentCount") or 0)
 
+        high_impact_parts = [*where_parts, "is_key_user = 1"]
+        high_impact_where = "WHERE " + " AND ".join(high_impact_parts)
         high_impact_sql = f"""
         SELECT COUNT(*) AS highImpactCount FROM (
           SELECT equipment_id
           FROM `{tbl}`
-          {where_sql}
-            AND is_key_user = 1
+          {high_impact_where}
           GROUP BY equipment_id
           HAVING COUNT(DISTINCT cons_no) >= 20
         ) sub
@@ -512,6 +512,7 @@ class CountyRepository:
         if county_id:
             where_parts.append("rdt_county_id = :county_id")
             params["county_id"] = county_id
+        where_parts.append("equipment_id IS NOT NULL AND equipment_id <> ''")
         where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
         limit_sql = ""
@@ -523,13 +524,13 @@ class CountyRepository:
         sql = f"""
         SELECT
           IFNULL(equipment_id, '') AS equipmentId,
-          IFNULL(equipment_name, '') AS equipmentName,
+          IFNULL(MAX(equipment_name), '') AS equipmentName,
           COUNT(DISTINCT CASE WHEN is_key_user = 1 THEN cons_no END) AS keyUsers,
           COUNT(DISTINCT CASE WHEN is_sensitive_user = 1 THEN cons_no END) AS sensitiveUsers,
           COUNT(DISTINCT outage_number) AS outageCount
         FROM `{tbl}`
         {where_sql}
-        GROUP BY equipment_id, equipment_name
+        GROUP BY equipment_id
         ORDER BY keyUsers DESC, outageCount DESC
         {limit_sql}
         """
@@ -554,6 +555,7 @@ class CountyRepository:
         if county_id:
             where_parts.append("rdt_county_id = :county_id")
             params["county_id"] = county_id
+        where_parts.append("equipment_id IS NOT NULL AND equipment_id <> ''")
         where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
         tbl = self.user_score_table
@@ -570,12 +572,12 @@ class CountyRepository:
         list_sql = f"""
         SELECT
           IFNULL(equipment_id, '') AS equipmentId,
-          IFNULL(equipment_name, '') AS equipmentName,
+          IFNULL(MAX(equipment_name), '') AS equipmentName,
           COUNT(DISTINCT CASE WHEN is_key_user = 1 THEN cons_no END) AS keyUsers,
           COUNT(DISTINCT CASE WHEN is_sensitive_user = 1 THEN cons_no END) AS sensitiveUsers
         FROM `{tbl}`
         {where_sql}
-        GROUP BY equipment_id, equipment_name
+        GROUP BY equipment_id
         ORDER BY keyUsers DESC
         LIMIT :_limit OFFSET :_offset
         """
@@ -591,13 +593,13 @@ class CountyRepository:
         stats_sql = f"""
         SELECT
           IFNULL(equipment_id, '') AS equipmentId,
-          IFNULL(equipment_name, '') AS equipmentName,
-          IFNULL(equipment_type, '') AS equipmentType,
+          IFNULL(MAX(equipment_name), '') AS equipmentName,
+          IFNULL(MAX(equipment_type), '') AS equipmentType,
           COUNT(DISTINCT CASE WHEN is_key_user = 1 THEN cons_no END) AS keyUserCount,
           COUNT(DISTINCT CASE WHEN is_sensitive_user = 1 THEN cons_no END) AS sensitiveUserCount
         FROM `{tbl}`
         WHERE equipment_id = :equipment_id
-        GROUP BY equipment_id, equipment_name, equipment_type
+        GROUP BY equipment_id
         """
         stats = self._fetch_one(stats_sql, {"equipment_id": equipment_id})
         if not stats or not stats.get("equipmentId"):
@@ -655,6 +657,16 @@ class CountyRepository:
     def user_outage_timeline(self, cons_no, begin_time, end_time, rdt_county_id=None):
         tbl = self.user_score_table
 
+        where_parts = ["cons_no = :cons_no"]
+        params = {"cons_no": cons_no}
+        time_parts, time_params = self._time_filters(begin_time, end_time)
+        where_parts.extend(time_parts)
+        params.update(time_params)
+        if rdt_county_id:
+            where_parts.append("rdt_county_id = :rdt_county_id")
+            params["rdt_county_id"] = rdt_county_id
+        where_sql = "WHERE " + " AND ".join(where_parts)
+
         info_sql = f"""
         SELECT
           cons_no AS consNo,
@@ -663,26 +675,17 @@ class CountyRepository:
           IFNULL(trade_name, '') AS tradeName,
           IFNULL(cons_addr, '') AS consAddr
         FROM `{tbl}`
-        WHERE cons_no = :cons_no
+        {where_sql}
+        ORDER BY begin_time DESC
         LIMIT 1
         """
-        info = self._fetch_one(info_sql, {"cons_no": cons_no})
+        info = self._fetch_one(info_sql, params)
         if not info or not info.get("consNo"):
             return None
 
-        where_parts = [
-            "cons_no = :cons_no",
-            "`begin_time` >= :begin_time",
-            "`begin_time` <= :end_time",
-        ]
-        params = {"cons_no": cons_no, "begin_time": begin_time, "end_time": end_time}
-        if rdt_county_id:
-            where_parts.append("rdt_county_id = :rdt_county_id")
-            params["rdt_county_id"] = rdt_county_id
-        where_sql = "WHERE " + " AND ".join(where_parts)
-
         outages_sql = f"""
-        SELECT
+        SELECT DISTINCT
+          IFNULL(outage_number, '') AS outageNumber,
           IFNULL(begin_time, '') AS beginTime,
           IFNULL(end_time, '') AS endTime
         FROM `{tbl}`
@@ -714,13 +717,13 @@ class CountyRepository:
         SELECT
           IFNULL(rdt_maint_group_id, '') AS maintGroupId,
           IFNULL(rdt_maint_group_name, '') AS maintGroupName,
-          SUM(CASE WHEN is_key_user = 1 THEN 1 ELSE 0 END) AS keyUsers,
-          SUM(CASE WHEN is_sensitive_user = 1 THEN 1 ELSE 0 END) AS sensitiveUsers
+          COUNT(DISTINCT CASE WHEN is_key_user = 1 THEN NULLIF(cons_no, '') END) AS keyUsers,
+          COUNT(DISTINCT CASE WHEN is_sensitive_user = 1 THEN NULLIF(cons_no, '') END) AS sensitiveUsers
         FROM `{self.user_score_table}`
         {where_sql}
         GROUP BY rdt_maint_group_id, rdt_maint_group_name
-        ORDER BY (SUM(CASE WHEN is_key_user = 1 THEN 1 ELSE 0 END)
-                + SUM(CASE WHEN is_sensitive_user = 1 THEN 1 ELSE 0 END)) DESC
+        ORDER BY (COUNT(DISTINCT CASE WHEN is_key_user = 1 THEN NULLIF(cons_no, '') END)
+                + COUNT(DISTINCT CASE WHEN is_sensitive_user = 1 THEN NULLIF(cons_no, '') END)) DESC
         """
         rows = self._fetch_all(sql, params)
         for row in rows:
@@ -763,10 +766,11 @@ class CountyRepository:
           END AS bucket,
           COUNT(*) AS userCount
         FROM (
-          SELECT cons_no, COUNT(*) AS outage_cnt
+          SELECT cons_no, COUNT(DISTINCT NULLIF(outage_number, '')) AS outage_cnt
           FROM `{tbl}`
           {where_sql}
           GROUP BY cons_no
+          HAVING outage_cnt > 0
         ) sub
         GROUP BY bucket
         """
@@ -798,7 +802,7 @@ class CountyRepository:
         elif user_level == "key":
             parts.append("is_key_user = 1")
         elif user_level == "normal":
-            parts.append("is_key_user = 0")
+            parts.append("is_key_user = 0 AND is_sensitive_user = 0")
         elif user_level == "key_sensitive":
             parts.append("(is_key_user = 1 OR is_sensitive_user = 1)")
 
@@ -851,10 +855,21 @@ class CountyRepository:
             if snapshot_end_date:
                 parts.append("snapshot_date <= :snapshot_end_date")
                 params["snapshot_end_date"] = snapshot_end_date
-        if begin_time:
-            parts.append("`begin_time` >= :filter_begin_time")
+        if begin_time and end_time:
+            parts.append(
+                "(`begin_time` <= :filter_end_time AND "
+                "COALESCE(NULLIF(CAST(`end_time` AS CHAR), ''), "
+                "'9999-12-31 23:59:59') >= :filter_begin_time)"
+            )
             params["filter_begin_time"] = begin_time
-        if end_time:
+            params["filter_end_time"] = end_time
+        elif begin_time:
+            parts.append(
+                "COALESCE(NULLIF(CAST(`end_time` AS CHAR), ''), "
+                "'9999-12-31 23:59:59') >= :filter_begin_time"
+            )
+            params["filter_begin_time"] = begin_time
+        elif end_time:
             parts.append("`begin_time` <= :filter_end_time")
             params["filter_end_time"] = end_time
         return parts, params
