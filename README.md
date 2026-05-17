@@ -156,7 +156,7 @@ curl http://127.0.0.1:5000/api/health
 
 ## API 接口文档
 
-所有接口均为 **POST** 方法，请求和响应均为 **JSON** 格式，基础路径为 `/api`。
+除健康检查外，业务接口均为 **POST** 方法，请求和响应均为 **JSON** 格式，基础路径为 `/api`。
 
 ### 统一响应格式
 
@@ -179,6 +179,15 @@ curl http://127.0.0.1:5000/api/health
 | POST | `/api/county/stats` | 区县用户统计（重点/敏感/普通用户数） |
 | POST | `/api/county/detail-stats` | 区县详细统计（行业分布、停电性质占比） |
 | POST | `/api/county/user-list` | 用户列表（分页、搜索、筛选） |
+| POST | `/api/county/user-outage-stats` | 用户停电次数统计（分页、搜索、筛选） |
+| POST | `/api/county/trend` | 区县时间趋势 |
+| POST | `/api/county/outage-freq` | 停电次数分布 |
+| POST | `/api/county/equipment-stats` | 设备影响统计 |
+| POST | `/api/county/equipment-list` | 设备影响列表 |
+| POST | `/api/county/equipment-page` | 设备影响分页查询 |
+| POST | `/api/county/equipment-detail` | 设备详情 |
+| POST | `/api/county/user-detail` | 用户停电详情 |
+| POST | `/api/county/user-outage-detail` | 用户停电时间线 |
 
 详细的请求参数和响应字段说明请参阅 [docs/api_county.md](docs/api_county.md)。
 
@@ -208,7 +217,7 @@ python -m utils.trade_city_get.region_fetcher --start 2025-01-01 --end 2026-04-3
 python -m utils.trade_city_get.outage_fetcher --start 2025-01-01 --end 2026-04-30
 ```
 
-同步变电站、馈线、停电用户明细数据。会同时写入 `substation`、`feeder` 和 `outage_user_full` 表。
+同步变电站、馈线、设备及设备-馈线关系等停电维度数据。脚本会确保相关维度表可用；API 主查询表 `outage_user_full` 需要由用户停电明细 ETL 写入后，业务接口才会返回真实统计数据。
 
 ### 设备数据采集
 
@@ -248,7 +257,7 @@ python -m utils.trade_city_get.seed_equipment --pages 10 --months 6
 
 | 表名 | 说明 | 主要字段 |
 |------|------|----------|
-| `outage_user_full` | 停电用户明细（主查询表） | `cons_no`, `cons_name`, `rdt_county_id`, `trade_type`, `outage_nature`, `is_key_user`, `is_sensitive_user`, `begin_time`, `snapshot_date` |
+| `outage_user_full` | 停电用户明细（主查询表） | `cons_no`, `cons_name`, `outage_number`, `rdt_city_id`, `rdt_county_id`, `trade_type`, `outage_nature`, `is_key_user`, `is_sensitive_user`, `begin_time`, `end_time`, `snapshot_date` |
 
 表名可通过环境变量 `MYSQL_USER_SCORE_TABLE` 自定义。
 
@@ -259,7 +268,7 @@ python -m utils.trade_city_get.seed_equipment --pages 10 --months 6
   │
   ├── industry_fetcher  ──→ trade_industry
   ├── region_fetcher    ──→ city / county / maint_group
-  ├── outage_fetcher    ──→ substation / feeder / outage_user_full
+  ├── outage_fetcher    ──→ substation / feeder / equipment / equipment_feeder
   └── seed_equipment    ──→ equipment / equipment_feeder
                               │
                               ▼

@@ -1,9 +1,12 @@
 import os
+import re
 import pymysql
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+_TABLE_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 CREATE_TRADE_INDUSTRY = """
 CREATE TABLE IF NOT EXISTS trade_industry (
@@ -374,14 +377,64 @@ CREATE TABLE IF NOT EXISTS equipment_feeder (
 """
 
 
+CREATE_OUTAGE_USER_FULL_TEMPLATE = """
+CREATE TABLE IF NOT EXISTS `{table_name}` (
+    id                    BIGINT AUTO_INCREMENT PRIMARY KEY,
+    outage_number         VARCHAR(128) DEFAULT '' COMMENT '停电编号',
+    cons_no               VARCHAR(128) DEFAULT '' COMMENT '用户编号',
+    cons_name             VARCHAR(256) DEFAULT '' COMMENT '用户名称',
+    cons_addr             VARCHAR(512) DEFAULT '' COMMENT '用户地址',
+    cons_type_name        VARCHAR(128) DEFAULT '' COMMENT '用户类型名称',
+    volt_level            VARCHAR(64)  DEFAULT '' COMMENT '电压等级',
+    trade_type            VARCHAR(64)  DEFAULT '' COMMENT '行业编码',
+    trade_name            VARCHAR(256) DEFAULT '' COMMENT '行业名称',
+    outage_nature         VARCHAR(64)  DEFAULT '' COMMENT '停电性质',
+    begin_time            DATETIME NULL COMMENT '停电开始时间',
+    end_time              DATETIME NULL COMMENT '复电时间',
+    rdt_city_id           VARCHAR(64)  DEFAULT '' COMMENT '地市ID',
+    rdt_county_id         VARCHAR(64)  DEFAULT '' COMMENT '区县ID',
+    rdt_county_name       VARCHAR(128) DEFAULT '' COMMENT '区县名称',
+    rdt_maint_group_id    VARCHAR(64)  DEFAULT '' COMMENT '运维班组ID',
+    rdt_maint_group_name  VARCHAR(128) DEFAULT '' COMMENT '运维班组名称',
+    equipment_id          VARCHAR(128) DEFAULT '' COMMENT '设备ID',
+    equipment_name        VARCHAR(256) DEFAULT '' COMMENT '设备名称',
+    equipment_type        VARCHAR(64)  DEFAULT '' COMMENT '设备类型',
+    tg_name               VARCHAR(256) DEFAULT '' COMMENT '台区名称',
+    is_key_user           TINYINT(1)   DEFAULT 0 COMMENT '是否重点用户',
+    is_sensitive_user     TINYINT(1)   DEFAULT 0 COMMENT '是否敏感用户',
+    snapshot_date         DATE NULL COMMENT '数据快照日期',
+    raw_json              LONGTEXT NULL COMMENT '原始记录',
+    created_at            DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at            DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    KEY idx_outage_user_time (begin_time, end_time),
+    KEY idx_outage_user_snapshot (snapshot_date),
+    KEY idx_outage_user_city (rdt_city_id),
+    KEY idx_outage_user_county (rdt_county_id),
+    KEY idx_outage_user_cons (cons_no),
+    KEY idx_outage_user_outage (outage_number),
+    KEY idx_outage_user_equipment (equipment_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+"""
+
+
+def _user_score_table_name():
+    table_name = os.environ.get("MYSQL_USER_SCORE_TABLE", "outage_user_full")
+    if not _TABLE_NAME_RE.fullmatch(table_name):
+        raise ValueError("MYSQL_USER_SCORE_TABLE must contain only letters, numbers, and underscores")
+    return table_name
+
+
 def ensure_outage_tables(conn):
     with conn.cursor() as cur:
         cur.execute(CREATE_SUBSTATION)
         cur.execute(CREATE_FEEDER)
         cur.execute(CREATE_EQUIPMENT)
         cur.execute(CREATE_EQUIPMENT_FEEDER)
+        cur.execute(CREATE_OUTAGE_USER_FULL_TEMPLATE.format(
+            table_name=_user_score_table_name()
+        ))
     conn.commit()
-    print("[db] outage dimension tables ready")
+    print("[db] outage tables ready")
 
 
 def _batch_executemany(conn, sql, rows, table_name):

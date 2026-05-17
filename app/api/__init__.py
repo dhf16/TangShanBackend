@@ -1,5 +1,7 @@
 from flask import Blueprint
 
+from app.common.response import success
+
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 
 # ------------------------------------------------------------------
@@ -8,7 +10,7 @@ api_bp = Blueprint("api", __name__, url_prefix="/api")
 
 @api_bp.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok"}
+    return success({"status": "ok"})
 
 
 # ------------------------------------------------------------------

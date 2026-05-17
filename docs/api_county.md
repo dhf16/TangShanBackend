@@ -2,7 +2,7 @@
 
 Base URL: `http://{host}:5000/api`
 
-所有接口统一使用 `POST` + `JSON` 请求体，`Content-Type: application/json`。
+除健康检查外，业务接口统一使用 `POST` + `JSON` 请求体，`Content-Type: application/json`。
 
 ---
 
@@ -40,7 +40,7 @@ Base URL: `http://{host}:5000/api`
 | HTTP 状态码 | code | 含义 |
 |------------|------|------|
 | 400 | 400 | 请求参数错误（缺少必填字段、格式不对、值不合法） |
-| 404 | 404 | 接口路径不存在 |
+| 404 | 404 | 接口路径不存在，或详情类资源不存在 |
 | 405 | 405 | 请求方法不允许（如用 GET 访问 POST 接口） |
 | 500 | 500 | 服务器内部错误 |
 
@@ -136,6 +136,7 @@ POST /api/county/stats
 | snapshotEndDate | string | 否 | 快照日期范围终点，与 snapshotDate 互斥 |
 
 > snapshotDate 与 snapshotStartDate/snapshotEndDate 的关系：传了 snapshotDate 则忽略范围参数；不传 snapshotDate 才使用范围筛选。
+> 用户数按 `cons_no` 去重统计；普通用户指既不是重点用户也不是敏感用户。时间范围按停电事件与 `[beginTime, endTime]` 是否有交集筛选；当 `endTime` 只传日期时，按当天 `23:59:59` 处理。
 
 ### 请求示例
 
@@ -251,17 +252,17 @@ POST /api/county/stats
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | data.summary | object | 汇总统计 |
-| data.summary.totalUsers | int | 用户总数 |
+| data.summary.totalUsers | int | 用户总数（按 `cons_no` 去重） |
 | data.summary.keyUsers | int | 关键用户数 |
 | data.summary.sensitiveUsers | int | 敏感用户数 |
-| data.summary.normalUsers | int | 普通用户数 |
+| data.summary.normalUsers | int | 普通用户数（既非重点也非敏感） |
 | data.list | array | 分布明细。不传 countyId 时按区县分组，传 countyId 时按运维班组分组 |
 | data.list[].name | string | 分组名称（区县名称或运维班组名称） |
 | data.list[].id | string | 分组 ID（区县 ID 或运维班组 ID） |
-| data.list[].totalUsers | int | 该分组用户总数（仅按区县分组时返回） |
+| data.list[].totalUsers | int | 该分组用户总数（按 `cons_no` 去重，仅按区县分组时返回） |
 | data.list[].keyUsers | int | 该分组关键用户数 |
 | data.list[].sensitiveUsers | int | 该分组敏感用户数 |
-| data.list[].normalUsers | int | 该分组普通用户数（仅按区县分组时返回） |
+| data.list[].normalUsers | int | 该分组普通用户数（既非重点也非敏感，仅按区县分组时返回） |
 | data.list[].keyPercentage | float | 该分组重点用户占 keyUsers + sensitiveUsers 总和的百分比，保留一位小数 |
 | data.list[].sensitivePercentage | float | 该分组敏感用户占 keyUsers + sensitiveUsers 总和的百分比，保留一位小数 |
 
@@ -441,6 +442,7 @@ POST /api/county/user-list
     "list": [
       {
         "consNo": "1234567890",
+        "outageNumber": "OT20250101001",
         "consName": "唐山钢铁有限公司",
         "countyName": "路南区",
         "tradeName": "大工业",
@@ -450,6 +452,7 @@ POST /api/county/user-list
       },
       {
         "consNo": "9876543210",
+        "outageNumber": "OT20250101002",
         "consName": "路南医院",
         "countyName": "路南区",
         "tradeName": "一般工商业",
@@ -472,6 +475,7 @@ POST /api/county/user-list
 | data.perPage | int | 每页条数 |
 | data.list | array | 用户列表 |
 | data.list[].consNo | string | 用户编号 |
+| data.list[].outageNumber | string | 停电编号，可用于调用用户停电详情接口 |
 | data.list[].consName | string | 用户名称 |
 | data.list[].countyName | string | 所属区县名称 |
 | data.list[].tradeName | string | 所属行业名称 |
@@ -583,7 +587,7 @@ POST /api/county/user-outage-stats
 | data.list[].consName | string | 用户名称 |
 | data.list[].countyName | string | 所属区县名称 |
 | data.list[].tradeName | string | 所属行业名称 |
-| data.list[].outageCount | int | 停电次数 |
+| data.list[].outageCount | int | 停电次数（按 `outage_number` 去重） |
 
 ---
 
@@ -606,7 +610,7 @@ POST /api/county/trend
 
 ### 分段规则
 
-接口自动将 `[beginTime, endTime]` 均分为 6 个时间段，每个时间段的结束时间作为折线图 X 轴坐标。
+接口自动将 `[beginTime, endTime]` 均分为 6 个时间段，每个时间段的结束时间作为折线图 X 轴坐标。每个时间段统计与该时间段有交集的停电事件中受影响的重点/敏感用户数，用户按 `cons_no` 去重。
 
 **示例**：`beginTime = 2025-01-01 21:31:00`，`endTime = 2025-01-01 21:34:00`（共 3 分钟）：
 
@@ -753,7 +757,7 @@ POST /api/county/outage-freq
 
 ### 统计逻辑
 
-1. 按 `cons_no`（用户编号）分组，统计每个用户在时间范围内的停电记录数
+1. 按 `cons_no`（用户编号）分组，统计每个用户在时间范围内的停电事件数（按 `outage_number` 去重）
 2. 将停电次数分为三个桶：1 次、2 次、3 次及以上
 3. 分别对 `is_key_user = 1` 和 `is_sensitive_user = 1` 各独立统计一次
 4. 一个用户可以同时是重点用户和敏感用户，两部分独立计算
@@ -1074,6 +1078,7 @@ POST /api/county/equipment-detail
 | data.sensitiveUsers | array | 敏感用户列表，字段同 keyUsers |
 
 > 一个用户可以同时是重点用户和敏感用户，因此可能同时出现在 keyUsers 和 sensitiveUsers 中。
+> 未找到对应 `equipmentId` 时返回 404：`Equipment not found`。
 
 ---
 
@@ -1133,6 +1138,8 @@ POST /api/county/user-detail
 | data.tgName | string | 台区名称 |
 | data.tradeName | string | 行业名称 |
 
+> 未找到对应 `consNo + outageNumber` 时返回 404：`User outage not found`。
+
 ---
 
 ## 12. 用户停电时间线
@@ -1188,9 +1195,9 @@ POST /api/county/user-outage-detail
     "consAddr": "唐山市路南区某某路123号",
     "outageCount": 3,
     "outages": [
-      { "beginTime": "2025-03-15 14:00:00", "endTime": "2025-03-15 16:30:00" },
-      { "beginTime": "2025-02-01 08:00:00", "endTime": "" },
-      { "beginTime": "2025-01-01 10:00:00", "endTime": "2025-01-01 12:00:00" }
+      { "outageNumber": "OT20250315001", "beginTime": "2025-03-15 14:00:00", "endTime": "2025-03-15 16:30:00" },
+      { "outageNumber": "OT20250201001", "beginTime": "2025-02-01 08:00:00", "endTime": "" },
+      { "outageNumber": "OT20250101001", "beginTime": "2025-01-01 10:00:00", "endTime": "2025-01-01 12:00:00" }
     ]
   },
   "timestamp": "2026-05-12T10:00:00+08:00"
@@ -1208,6 +1215,7 @@ POST /api/county/user-outage-detail
 | data.consAddr | string | 用户地址 |
 | data.outageCount | int | 停电次数 |
 | data.outages | array | 停电事件列表，按开始时间降序 |
+| data.outages[].outageNumber | string | 停电编号 |
 | data.outages[].beginTime | string | 停电开始时间 |
 | data.outages[].endTime | string | 复电时间，为空字符串表示尚未复电 |
 
@@ -1219,11 +1227,18 @@ POST /api/county/user-outage-detail
 |------|---------|------------|
 | beginTime 或 endTime 缺失 | `beginTime and endTime are required` | 400 |
 | beginTime 或 endTime 格式错误 | `beginTime format must be YYYY-MM-DD or YYYY-MM-DD HH:mm:ss` | 400 |
+| beginTime 晚于 endTime | `beginTime must be earlier than or equal to endTime` | 400 |
+| 趋势接口 beginTime 等于 endTime | `endTime must be later than beginTime` | 400 |
+| snapshotDate/snapshotStartDate/snapshotEndDate 格式错误 | `<field> format must be YYYY-MM-DD` | 400 |
+| snapshotStartDate 晚于 snapshotEndDate | `snapshotStartDate must be earlier than or equal to snapshotEndDate` | 400 |
 | userLevel 值不合法 | `userLevel must be one of all/key/sensitive/key_sensitive` | 400 |
 | countyId 和 cityId 同时传入 | `countyId and cityId are mutually exclusive` | 400 |
 | page 或 perPage 不是整数 | `page and perPage must be integers` | 400 |
 | page < 1 | `page must be greater than or equal to 1` | 400 |
 | perPage 不在 1-500 范围 | `perPage must be between 1 and 500` | 400 |
 | 访问不存在的接口 | `Resource not found` | 404 |
+| 查询不存在的设备详情 | `Equipment not found` | 404 |
+| 查询不存在的用户停电详情 | `User outage not found` | 404 |
+| 查询不存在的用户停电时间线 | `User not found` | 404 |
 | 使用错误的 HTTP 方法 | `Method not allowed` | 405 |
 | 服务端数据库异常 | `Failed to query xxx` | 500 |
