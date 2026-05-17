@@ -1,4 +1,5 @@
 import re
+from datetime import datetime
 
 import pymysql
 from dbutils.pooled_db import PooledDB
@@ -361,7 +362,7 @@ class RightPanelRepository:
         event_sql = self._event_summary_sql(where_sql)
         row = self._fetch_one(
             f"SELECT * FROM ({event_sql}) e LIMIT 1",
-            {"outage_number": outage_number},
+            {"outage_number": outage_number, "filter_end_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
         )
         if not row:
             return {}
