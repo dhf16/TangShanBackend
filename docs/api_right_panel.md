@@ -91,7 +91,214 @@ GET http://127.0.0.1:5000/api/health
 }
 ```
 
-## 四、右侧总览
+## 四、县区警示灯（模块一）
+
+```http
+POST /api/right-panel/county-warnings
+```
+
+用于右侧第一模块"县区警示灯"，查询指定城市下各区县在给定时间段内是否存在停电事件，前端根据返回的 `hasOutage` 渲染红绿灯。
+
+请求示例：
+
+```json
+{
+  "beginTime": "2025-01-01 00:00:00",
+  "endTime": "2026-01-30 00:10:59"
+}
+```
+
+带 `cityId` 示例：
+
+```json
+{
+  "beginTime": "2025-01-01 00:00:00",
+  "endTime": "2026-01-30 00:10:59",
+  "cityId": "1100F3DE22316FADE050007F01006CBE"
+}
+```
+
+请求参数：
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| beginTime | string | 是 | 查询起始时间，格式 `YYYY-MM-DD` 或 `YYYY-MM-DD HH:mm:ss` |
+| endTime | string | 是 | 查询截止时间，格式 `YYYY-MM-DD` 或 `YYYY-MM-DD HH:mm:ss` |
+| cityId | string | 否 | 地市 ID，用于限定查询哪座城市下属的区县；不传时默认使用唐山市 ID `1100F3DE22316FADE050007F01006CBE` |
+
+返回 `data` 结构：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| countyName | string | 区县/供电单位名称 |
+| hasOutage | bool | 该区县在查询时间段内是否存在停电事件，`true` 表示有停电（前端渲染红灯），`false` 表示无停电（前端渲染绿灯） |
+
+判断逻辑：在 `beginTime` ~ `endTime` 时间范围内，该区县在 `outage_user_full` 表中是否存在记录（`COUNT > 0`），不考虑复电状态。
+
+返回示例：
+
+```json
+{
+  "code": 0,
+  "success": true,
+  "message": "ok",
+  "data": [
+    { "countyName": "滦州市供电公司", "hasOutage": true },
+    { "countyName": "遵化市供电公司", "hasOutage": true },
+    { "countyName": "迁安市供电公司", "hasOutage": true },
+    { "countyName": "玉田县供电公司", "hasOutage": true },
+    { "countyName": "乐亭县供电公司", "hasOutage": true },
+    { "countyName": "滦南县供电公司", "hasOutage": true },
+    { "countyName": "国网唐山供电公司运维检修部", "hasOutage": false },
+    { "countyName": "丰润区供电公司", "hasOutage": true },
+    { "countyName": "迁西县供电公司", "hasOutage": true },
+    { "countyName": "丰南区供电公司", "hasOutage": true },
+    { "countyName": "曹妃甸区供电公司", "hasOutage": true },
+    { "countyName": "开平供电中心", "hasOutage": false },
+    { "countyName": "古冶供电中心", "hasOutage": true }
+  ],
+  "timestamp": "2026-05-16T21:38:06+08:00"
+}
+```
+
+## 五、电力故障定位（模块二）
+
+```http
+POST /api/right-panel/fault-location
+```
+
+用于右侧第二模块"电力故障定位"，按维度（线路/变电站）统计故障分布。前端切换按钮时传入不同 `dimension` 值，后端返回对应维度的统计数据。
+
+请求示例（线路维度）：
+
+```json
+{
+  "beginTime": "2025-01-01 00:00:00",
+  "endTime": "2026-01-30 00:10:59",
+  "dimension": "feeder"
+}
+```
+
+请求示例（变电站维度）：
+
+```json
+{
+  "beginTime": "2025-01-01 00:00:00",
+  "endTime": "2026-01-30 00:10:59",
+  "dimension": "substation"
+}
+```
+
+请求参数：
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| beginTime | string | 是 | 查询起始时间，格式 `YYYY-MM-DD` 或 `YYYY-MM-DD HH:mm:ss` |
+| endTime | string | 是 | 查询截止时间，格式同上 |
+| dimension | string | 否 | 统计维度，`"feeder"`（线路，默认）或 `"substation"`（变电站） |
+| countyId | string | 否 | 区县/供电单位 ID，筛选特定区县的数据 |
+| dangerThreshold | int | 否 | danger 阈值，影响用户数大于此值为 danger，默认 `5000` |
+| warningThreshold | int | 否 | warning 阈值，影响用户数大于等于此值且不超过 dangerThreshold 为 warning，默认 `1000` |
+
+统计口径说明：
+
+- 按所选维度（线路/变电站）分组，统计每组的影响用户数
+- `danger`：影响用户数 > dangerThreshold
+- `warning`：影响用户数 >= warningThreshold 且 <= dangerThreshold
+- `safe`：影响用户数 < warningThreshold
+
+返回 `data` 字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| total | int | 当前维度下的线路/变电站总数 |
+| matchedEvents | int | 当前维度可匹配到的停电事件数量 |
+| danger | int | 高影响数量（影响用户数 > dangerThreshold） |
+| warning | int | 中影响数量（影响用户数 warningThreshold ~ dangerThreshold） |
+| safe | int | 低影响数量（影响用户数 < warningThreshold） |
+
+返回示例：
+
+```json
+{
+  "code": 0,
+  "success": true,
+  "message": "ok",
+  "data": {
+    "total": 298,
+    "matchedEvents": 754,
+    "danger": 0,
+    "warning": 12,
+    "safe": 286
+  },
+  "timestamp": "2026-05-16T22:08:36+08:00"
+}
+```
+
+## 六、停电范围评估（模块三）
+
+```http
+POST /api/right-panel/outage-scope
+```
+
+用于右侧第三模块"停电范围评估"，统计时间范围内的停电事件总数、已复电/未复电事件数、影响设备数、影响用户数。
+
+请求示例：
+
+```json
+{
+  "beginTime": "2025-01-01 00:00:00",
+  "endTime": "2026-01-30 00:10:59"
+}
+```
+
+带区县筛选示例：
+
+```json
+{
+  "beginTime": "2025-01-01 00:00:00",
+  "endTime": "2026-01-30 00:10:59",
+  "countyId": "某个区县ID"
+}
+```
+
+请求参数：
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| beginTime | string | 是 | 查询起始时间，格式 `YYYY-MM-DD` 或 `YYYY-MM-DD HH:mm:ss` |
+| endTime | string | 是 | 查询截止时间，格式同上 |
+| countyId | string | 否 | 区县/供电单位 ID，筛选特定区县的数据 |
+
+返回 `data` 字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| totalEvents | int | 停电事件总数（已复电 + 未复电） |
+| restoredEvents | int | 已复电事件数 |
+| unrestoredEvents | int | 未复电事件数 |
+| affectedEquipment | int | 影响设备数 |
+| affectedUsers | int | 影响用户数 |
+
+返回示例：
+
+```json
+{
+  "code": 0,
+  "success": true,
+  "message": "ok",
+  "data": {
+    "totalEvents": 1939,
+    "restoredEvents": 1939,
+    "unrestoredEvents": 0,
+    "affectedEquipment": 3585,
+    "affectedUsers": 96887
+  },
+  "timestamp": "2026-05-16T22:29:55+08:00"
+}
+```
+
+## 七、右侧总览（旧版聚合接口）
 
 ```http
 POST /api/right-panel/overview
@@ -173,7 +380,7 @@ POST /api/fault/summary
 | bars | `danger/warning/safe` 图表数据 |
 | colorBars | `red/yellow/green` 图表数据 |
 
-## 六、电力故障定位事件列表
+## 九、电力故障定位事件列表
 
 ```http
 POST /api/fault/event-list
@@ -271,7 +478,7 @@ outage_user_full.equipment_id
 | equipment_feeder_matched | 已通过 `outage_user_full.equipment_id -> equipment_feeder -> feeder` 匹配到馈线 |
 | equipment_only | 只能从 `outage_user_full` 拿到设备信息，未匹配到馈线 |
 
-## 七、故障设备列表兼容接口
+## 十、故障设备列表兼容接口
 
 ```http
 POST /api/fault/equipment-list
@@ -300,7 +507,7 @@ POST /api/fault/event-list
 - 不支持 `dimension` 参数。
 - 保留此接口是为了兼容旧版前端或已有测试集合。
 
-## 八、停电范围评估汇总
+## 十一、停电范围评估汇总
 
 ```http
 POST /api/outage-scope/summary
@@ -330,7 +537,7 @@ POST /api/outage-scope/summary
 | affectedEquipment | 影响设备数 |
 | affectedUsers | 影响用户数 |
 
-## 九、停电范围事件列表
+## 十二、停电范围事件列表
 
 ```http
 POST /api/outage-scope/event-list
@@ -370,7 +577,7 @@ POST /api/outage-scope/event-list
 - `keyword` 当前匹配停电编号或区县名称。
 - `outageNature` 可传 `planned`、`fault`、`other`、`01`、`02`、`03`。
 
-## 十、停电范围链路列表
+## 十三、停电范围链路列表
 
 ```http
 POST /api/outage-scope/chains
@@ -426,7 +633,7 @@ POST /api/outage-scope/chains
 }
 ```
 
-## 十一、右侧停电事件详情
+## 十四、右侧停电事件详情
 
 ```http
 POST /api/right-panel/outage-event-detail
@@ -464,7 +671,7 @@ POST /api/right-panel/outage-event-detail
 | normalUserCount | 普通用户数 |
 | matchStatus | 匹配状态 |
 
-## 十二、右侧停电事件列表兼容接口
+## 十五、右侧停电事件列表兼容接口
 
 ```http
 POST /api/right-panel/outage-events
@@ -488,7 +695,7 @@ POST /api/right-panel/outage-events
 - 这是 `/api/outage-scope/event-list` 的右侧模块兼容入口。
 - 前端如果已经统一使用 `/api/outage-scope/event-list`，可以不单独调用此接口。
 
-## 十三、右侧停电链路兼容接口
+## 十六、右侧停电链路兼容接口
 
 ```http
 POST /api/right-panel/outage-chains
@@ -512,7 +719,7 @@ POST /api/right-panel/outage-chains
 - 这是 `/api/outage-scope/chains` 的右侧模块兼容入口。
 - 前端如果已经统一使用 `/api/outage-scope/chains`，可以不单独调用此接口。
 
-## 十四、Apifox 建议测试顺序
+## 十七、Apifox 建议测试顺序
 
 1. `GET /api/health`
 2. `POST /api/outage-scope/chains`
@@ -534,7 +741,7 @@ POST /api/right-panel/outage-chains
 }
 ```
 
-## 十五、注意事项
+## 十八、注意事项
 
 - `.env` 是本地真实数据库配置文件，不要提交到 GitHub。
 - `.env.example` 只放示例配置，不放真实密码。

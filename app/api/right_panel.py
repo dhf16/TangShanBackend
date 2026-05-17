@@ -91,6 +91,79 @@ def right_panel_overview():
     return success(data)
 
 
+@right_panel_bp.route("/county-warnings", methods=["POST"])
+def right_panel_county_warnings():
+    req_data = _json_body()
+    begin_time, end_time, err = _require_time_range(req_data)
+    if err:
+        return err
+
+    try:
+        data = right_panel_repository.county_outage_status(
+            begin_time=begin_time,
+            end_time=end_time,
+            city_id=_optional_str(req_data.get("cityId")),
+            **_snapshot_filters(req_data),
+        )
+    except Exception:
+        current_app.logger.exception("Failed to query county warnings")
+        return error("Failed to query county warnings", 500)
+
+    return success(data)
+
+
+def _parse_int(req_data, key, default):
+    try:
+        return int(req_data.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+@right_panel_bp.route("/fault-location", methods=["POST"])
+def right_panel_fault_location():
+    req_data = _json_body()
+    begin_time, end_time, err = _require_time_range(req_data)
+    if err:
+        return err
+
+    try:
+        data = right_panel_repository.fault_location_summary(
+            begin_time=begin_time,
+            end_time=end_time,
+            county_id=_optional_str(req_data.get("countyId")),
+            dimension=_optional_str(req_data.get("dimension")),
+            danger_threshold=_parse_int(req_data, "dangerThreshold", 5000),
+            warning_threshold=_parse_int(req_data, "warningThreshold", 1000),
+            **_snapshot_filters(req_data),
+        )
+    except Exception:
+        current_app.logger.exception("Failed to query fault location")
+        return error("Failed to query fault location", 500)
+
+    return success(data)
+
+
+@right_panel_bp.route("/outage-scope", methods=["POST"])
+def right_panel_outage_scope():
+    req_data = _json_body()
+    begin_time, end_time, err = _require_time_range(req_data)
+    if err:
+        return err
+
+    try:
+        data = right_panel_repository.outage_scope(
+            begin_time=begin_time,
+            end_time=end_time,
+            county_id=_optional_str(req_data.get("countyId")),
+            **_snapshot_filters(req_data),
+        )
+    except Exception:
+        current_app.logger.exception("Failed to query outage scope")
+        return error("Failed to query outage scope", 500)
+
+    return success(data)
+
+
 @right_panel_bp.route("/outage-events", methods=["POST"])
 def right_panel_outage_events():
     req_data = _json_body()
