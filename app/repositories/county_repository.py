@@ -690,7 +690,7 @@ class CountyRepository:
           IFNULL(end_time, '') AS endTime
         FROM `{tbl}`
         {where_sql}
-        ORDER BY begin_time DESC
+        ORDER BY beginTime DESC
         """
         outages = self._fetch_all(outages_sql, params)
 
