@@ -155,8 +155,14 @@ def county_detail_stats():
     if err:
         return err
 
+    county_id = _optional_str(req_data.get("countyId"))
+    city_id = _optional_str(req_data.get("cityId"))
+    if county_id and city_id:
+        return error("countyId and cityId are mutually exclusive", 400)
+
     common = {
-        "rdt_county_id": _optional_str(req_data.get("countyId")),
+        "rdt_county_id": county_id,
+        "city_id": city_id,
         "begin_time": begin_time,
         "end_time": end_time,
         **_snapshot_filters(req_data),
@@ -213,6 +219,11 @@ def county_user_list():
     if user_level == "all" or not user_level:
         user_level = None
 
+    county_id = _optional_str(req_data.get("countyId"))
+    city_id = _optional_str(req_data.get("cityId"))
+    if county_id and city_id:
+        return error("countyId and cityId are mutually exclusive", 400)
+
     page, per_page, err = _parse_pagination(req_data)
     if err:
         return err
@@ -223,7 +234,8 @@ def county_user_list():
             per_page=per_page,
             user_level=user_level,
             keyword=_optional_str(req_data.get("keyword")),
-            rdt_county_id=_optional_str(req_data.get("countyId")),
+            rdt_county_id=county_id,
+            city_id=city_id,
             begin_time=begin_time,
             end_time=end_time,
             **_snapshot_filters(req_data),
@@ -269,6 +281,11 @@ def county_user_outage_stats():
     else:
         outage_count = None
 
+    county_id = _optional_str(req_data.get("countyId"))
+    city_id = _optional_str(req_data.get("cityId"))
+    if county_id and city_id:
+        return error("countyId and cityId are mutually exclusive", 400)
+
     page, per_page, err = _parse_pagination(req_data)
     if err:
         return err
@@ -277,7 +294,8 @@ def county_user_outage_stats():
         rows, total = county_repository.query_user_outage_stats(
             page=page,
             per_page=per_page,
-            rdt_county_id=_optional_str(req_data.get("countyId")),
+            rdt_county_id=county_id,
+            city_id=city_id,
             keyword=_optional_str(req_data.get("keyword")),
             outage_count_filter=outage_count,
             begin_time=begin_time,
@@ -313,11 +331,17 @@ def county_trend():
     if err:
         return err
 
+    county_id = _optional_str(req_data.get("countyId"))
+    city_id = _optional_str(req_data.get("cityId"))
+    if county_id and city_id:
+        return error("countyId and cityId are mutually exclusive", 400)
+
     try:
         points = county_repository.trend_by_time(
             begin_time=begin_time,
             end_time=end_time,
-            rdt_county_id=_optional_str(req_data.get("countyId")),
+            rdt_county_id=county_id,
+            city_id=city_id,
         )
     except ValueError as e:
         return error(str(e), 400)
@@ -336,10 +360,15 @@ def county_outage_freq():
         return err
 
     county_id = _optional_str(req_data.get("countyId"))
+    city_id = _optional_str(req_data.get("cityId"))
+    if county_id and city_id:
+        return error("countyId and cityId are mutually exclusive", 400)
+
     common = {
         "begin_time": begin_time,
         "end_time": end_time,
         "rdt_county_id": county_id,
+        "city_id": city_id,
         **_snapshot_filters(req_data),
     }
 
