@@ -283,7 +283,8 @@ POST /api/county/detail-stats
 |------|------|------|------|
 | beginTime | string | **是** | 查询起始时间，格式 `YYYY-MM-DD` 或 `YYYY-MM-DD HH:mm:ss` |
 | endTime | string | **是** | 查询截止时间，格式同上 |
-| countyId | string | 否 | 区县 ID，不传则统计全部区县 |
+| cityId | string | 否 | 城市 ID，传入则只统计该城市。与 countyId 互斥 |
+| countyId | string | 否 | 区县 ID，不传则统计全部区县。与 cityId 互斥 |
 | snapshotDate | string | 否 | 数据快照日期 |
 | snapshotStartDate | string | 否 | 快照日期范围起点 |
 | snapshotEndDate | string | 否 | 快照日期范围终点 |
@@ -389,7 +390,8 @@ POST /api/county/user-list
 |------|------|------|------|
 | beginTime | string | **是** | 查询起始时间，格式 `YYYY-MM-DD` 或 `YYYY-MM-DD HH:mm:ss` |
 | endTime | string | **是** | 查询截止时间，格式同上 |
-| countyId | string | 否 | 区县 ID，不传则查全部区县 |
+| cityId | string | 否 | 城市 ID，传入则只查该城市下的用户。与 countyId 互斥 |
+| countyId | string | 否 | 区县 ID，不传则查全部区县。与 cityId 互斥 |
 | keyword | string | 否 | 搜索关键词，匹配用户名称、用户编号、停电编号 |
 | userLevel | string | 否 | 用户等级筛选，可选值：`all`、`key`、`sensitive`、`key_sensitive`（重点+敏感用户）。不传或传 `all` 表示不筛选 |
 | page | int | 否 | 页码，默认 1，最小 1 |
@@ -493,7 +495,8 @@ POST /api/county/user-outage-stats
 |------|------|------|------|
 | beginTime | string | **是** | 查询起始时间，格式 `YYYY-MM-DD` 或 `YYYY-MM-DD HH:mm:ss` |
 | endTime | string | **是** | 查询截止时间，格式同上 |
-| countyId | string | 否 | 区县 ID，不传则查全部区县 |
+| cityId | string | 否 | 城市 ID，传入则只查该城市下的用户。与 countyId 互斥 |
+| countyId | string | 否 | 区县 ID，不传则查全部区县。与 cityId 互斥 |
 | keyword | string | 否 | 搜索关键词，匹配用户名称、用户编号 |
 | outageCount | string | 否 | 停电次数筛选，可选值：`1`、`2`、`3+`（3次及以上）。不传表示不按停电次数筛选 |
 | page | int | 否 | 页码，默认 1，最小 1 |
@@ -598,7 +601,8 @@ POST /api/county/trend
 |------|------|------|------|
 | beginTime | string | **是** | 查询起始时间，格式 `YYYY-MM-DD` 或 `YYYY-MM-DD HH:mm:ss` |
 | endTime | string | **是** | 查询截止时间，格式同上 |
-| countyId | string | 否 | 区县 ID，不传则统计全部区县 |
+| cityId | string | 否 | 城市 ID，传入则只统计该城市。与 countyId 互斥 |
+| countyId | string | 否 | 区县 ID，不传则统计全部区县。与 cityId 互斥 |
 
 ### 分段规则
 
@@ -682,7 +686,8 @@ POST /api/county/outage-freq
 |------|------|------|------|
 | beginTime | string | **是** | 查询起始时间，格式 `YYYY-MM-DD` 或 `YYYY-MM-DD HH:mm:ss` |
 | endTime | string | **是** | 查询截止时间，格式同上 |
-| countyId | string | 否 | 区县 ID，不传则统计全部区县 |
+| cityId | string | 否 | 城市 ID，传入则只统计该城市。与 countyId 互斥 |
+| countyId | string | 否 | 区县 ID，不传则统计全部区县。与 cityId 互斥 |
 
 ### 请求示例
 

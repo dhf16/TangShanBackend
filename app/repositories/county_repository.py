@@ -193,6 +193,7 @@ class CountyRepository:
         self,
         user_level="key",
         rdt_county_id=None,
+        city_id=None,
         snapshot_date=None,
         snapshot_start_date=None,
         snapshot_end_date=None,
@@ -202,6 +203,7 @@ class CountyRepository:
         where_sql, params = self._build_where_clause(
             user_level=user_level,
             rdt_county_id=rdt_county_id,
+            city_id=city_id,
             snapshot_date=snapshot_date,
             snapshot_start_date=snapshot_start_date,
             snapshot_end_date=snapshot_end_date,
@@ -224,6 +226,7 @@ class CountyRepository:
         self,
         user_level="key",
         rdt_county_id=None,
+        city_id=None,
         snapshot_date=None,
         snapshot_start_date=None,
         snapshot_end_date=None,
@@ -233,6 +236,7 @@ class CountyRepository:
         where_sql, params = self._build_where_clause(
             user_level=user_level,
             rdt_county_id=rdt_county_id,
+            city_id=city_id,
             snapshot_date=snapshot_date,
             snapshot_start_date=snapshot_start_date,
             snapshot_end_date=snapshot_end_date,
@@ -257,6 +261,7 @@ class CountyRepository:
         user_level=None,
         keyword=None,
         rdt_county_id=None,
+        city_id=None,
         snapshot_date=None,
         snapshot_start_date=None,
         snapshot_end_date=None,
@@ -276,6 +281,7 @@ class CountyRepository:
             user_level=user_level,
             keyword=keyword,
             rdt_county_id=rdt_county_id,
+            city_id=city_id,
             snapshot_date=snapshot_date,
             snapshot_start_date=snapshot_start_date,
             snapshot_end_date=snapshot_end_date,
@@ -318,6 +324,7 @@ class CountyRepository:
         page,
         per_page,
         rdt_county_id=None,
+        city_id=None,
         keyword=None,
         outage_count_filter=None,
         begin_time=None,
@@ -328,6 +335,9 @@ class CountyRepository:
         if rdt_county_id:
             where_parts.append("rdt_county_id = :rdt_county_id")
             params["rdt_county_id"] = rdt_county_id
+        if city_id:
+            where_parts.append("rdt_city_id = :city_id")
+            params["city_id"] = city_id
 
         if keyword:
             where_parts.append("(cons_name LIKE :kw OR cons_no LIKE :kw)")
@@ -375,7 +385,7 @@ class CountyRepository:
 
         return rows, total
 
-    def trend_by_time(self, begin_time, end_time, rdt_county_id=None):
+    def trend_by_time(self, begin_time, end_time, rdt_county_id=None, city_id=None):
         boundaries, labels = _build_time_segments(begin_time, end_time)
 
         whens = []
@@ -402,6 +412,9 @@ class CountyRepository:
         if rdt_county_id:
             where_parts.append("rdt_county_id = :rdt_county_id")
             params["rdt_county_id"] = rdt_county_id
+        if city_id:
+            where_parts.append("rdt_city_id = :city_id")
+            params["city_id"] = city_id
         where_sql = "WHERE " + " AND ".join(where_parts)
 
         tbl = self.user_score_table
@@ -716,7 +729,7 @@ class CountyRepository:
 
     def outage_freq_distribution(
         self, user_level, begin_time=None, end_time=None,
-        rdt_county_id=None, snapshot_date=None,
+        rdt_county_id=None, city_id=None, snapshot_date=None,
         snapshot_start_date=None, snapshot_end_date=None,
     ):
         if user_level == "key":
@@ -729,6 +742,9 @@ class CountyRepository:
         if rdt_county_id:
             where_parts.append("rdt_county_id = :rdt_county_id")
             params["rdt_county_id"] = rdt_county_id
+        if city_id:
+            where_parts.append("rdt_city_id = :city_id")
+            params["city_id"] = city_id
         time_parts, time_params = self._time_filters(
             begin_time, end_time, snapshot_date, snapshot_start_date, snapshot_end_date
         )
@@ -766,6 +782,7 @@ class CountyRepository:
         trade_name=None,
         rdt_county_id=None,
         rdt_county_name=None,
+        city_id=None,
         snapshot_date=None,
         snapshot_start_date=None,
         snapshot_end_date=None,
@@ -799,6 +816,9 @@ class CountyRepository:
         if rdt_county_id:
             parts.append("rdt_county_id = :rdt_county_id")
             params["rdt_county_id"] = rdt_county_id
+        if city_id:
+            parts.append("rdt_city_id = :city_id")
+            params["city_id"] = city_id
         if rdt_county_name:
             parts.append("rdt_county_name LIKE :rdt_county_name")
             params["rdt_county_name"] = f"%{rdt_county_name}%"
