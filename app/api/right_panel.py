@@ -69,28 +69,6 @@ def _snapshot_filters(req_data):
     }
 
 
-@right_panel_bp.route("/overview", methods=["POST"])
-def right_panel_overview():
-    req_data = _json_body()
-    begin_time, end_time, err = _require_time_range(req_data)
-    if err:
-        return err
-
-    try:
-        data = right_panel_repository.overview(
-            begin_time=begin_time,
-            end_time=end_time,
-            county_id=_optional_str(req_data.get("countyId")),
-            city_id=_optional_str(req_data.get("cityId")),
-            **_snapshot_filters(req_data),
-        )
-    except Exception:
-        current_app.logger.exception("Failed to query right panel overview")
-        return error("Failed to query right panel overview", 500)
-
-    return success(data)
-
-
 @right_panel_bp.route("/county-warnings", methods=["POST"])
 def right_panel_county_warnings():
     req_data = _json_body()
