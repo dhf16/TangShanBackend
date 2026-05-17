@@ -79,14 +79,25 @@ class RightPanelRepository:
         snapshot_start_date=None,
         snapshot_end_date=None,
     ):
-        join_parts = [
-            "ou.`begin_time` >= :begin_time",
-            "ou.`begin_time` <= :end_time",
-        ]
-        params = {
-            "begin_time": begin_time,
-            "end_time": end_time,
-        }
+        join_parts = []
+        params = {}
+        if begin_time and end_time:
+            join_parts.append(
+                "(ou.`begin_time` <= :filter_end_time AND "
+                "COALESCE(NULLIF(CAST(ou.`end_time` AS CHAR), ''), "
+                "'9999-12-31 23:59:59') >= :filter_begin_time)"
+            )
+            params["filter_begin_time"] = begin_time
+            params["filter_end_time"] = end_time
+        elif begin_time:
+            join_parts.append(
+                "COALESCE(NULLIF(CAST(ou.`end_time` AS CHAR), ''), "
+                "'9999-12-31 23:59:59') >= :filter_begin_time"
+            )
+            params["filter_begin_time"] = begin_time
+        elif end_time:
+            join_parts.append("ou.`begin_time` <= :filter_end_time")
+            params["filter_end_time"] = end_time
         if snapshot_date:
             join_parts.append("ou.snapshot_date = :snapshot_date")
             params["snapshot_date"] = snapshot_date
@@ -128,6 +139,7 @@ class RightPanelRepository:
         self,
         begin_time,
         end_time,
+        city_id=None,
         county_id=None,
         dimension="feeder",
         danger_threshold=5000,
@@ -139,6 +151,7 @@ class RightPanelRepository:
         where_sql, params = self._build_base_where(
             begin_time,
             end_time,
+            city_id=city_id,
             county_id=county_id,
             snapshot_date=snapshot_date,
             snapshot_start_date=snapshot_start_date,
@@ -172,6 +185,7 @@ class RightPanelRepository:
         matched_events = self.fault_event_match_count(
             begin_time=begin_time,
             end_time=end_time,
+            city_id=city_id,
             county_id=county_id,
             dimension=dimension,
             snapshot_date=snapshot_date,
@@ -190,6 +204,7 @@ class RightPanelRepository:
         self,
         begin_time,
         end_time,
+        city_id=None,
         county_id=None,
         snapshot_date=None,
         snapshot_start_date=None,
@@ -198,6 +213,7 @@ class RightPanelRepository:
         where_sql, params = self._build_base_where(
             begin_time,
             end_time,
+            city_id=city_id,
             county_id=county_id,
             snapshot_date=snapshot_date,
             snapshot_start_date=snapshot_start_date,
@@ -225,10 +241,35 @@ class RightPanelRepository:
             "affectedUsers": _to_int(row.get("affectedUsers")),
         }
 
-    def outage_events(
+    def outage_events_summary(
         self,
         begin_time,
         end_time,
+        city_id=None,
+        county_id=None,
+        keyword=None,
+        outage_nature=None,
+        snapshot_date=None,
+        snapshot_start_date=None,
+        snapshot_end_date=None,
+    ):
+        where_sql, params = self._build_base_where(
+            begin_time,
+            end_time,
+            city_id=city_id,
+            county_id=county_id,
+            snapshot_date=snapshot_date,
+            snapshot_start_date=snapshot_start_date,
+            snapshot_end_date=snapshot_end_date,
+        )
+        event_sql = self._event_summary_sql(where_sql)
+        return self._event_summary_counts(event_sql, params)
+
+    def outage_events_list(
+        self,
+        begin_time,
+        end_time,
+        city_id=None,
         county_id=None,
         keyword=None,
         outage_nature=None,
@@ -241,13 +282,13 @@ class RightPanelRepository:
         where_sql, params = self._build_base_where(
             begin_time,
             end_time,
+            city_id=city_id,
             county_id=county_id,
             snapshot_date=snapshot_date,
             snapshot_start_date=snapshot_start_date,
             snapshot_end_date=snapshot_end_date,
         )
         event_sql = self._event_summary_sql(where_sql)
-        summary = self._event_summary_counts(event_sql, params)
 
         outer_where, outer_params = self._build_event_outer_filter(keyword, outage_nature)
         count_row = self._fetch_one(
@@ -272,7 +313,6 @@ class RightPanelRepository:
             },
         )
         return {
-            "summary": summary,
             "total": total,
             "page": page,
             "perPage": per_page,
@@ -283,6 +323,7 @@ class RightPanelRepository:
         self,
         begin_time,
         end_time,
+        city_id=None,
         county_id=None,
         dimension="line",
         snapshot_date=None,
@@ -292,6 +333,7 @@ class RightPanelRepository:
         where_sql, params = self._build_base_where(
             begin_time,
             end_time,
+            city_id=city_id,
             county_id=county_id,
             snapshot_date=snapshot_date,
             snapshot_start_date=snapshot_start_date,
@@ -336,6 +378,7 @@ class RightPanelRepository:
         self,
         begin_time,
         end_time,
+        city_id=None,
         county_id=None,
         page=1,
         per_page=20,
@@ -346,6 +389,7 @@ class RightPanelRepository:
         where_sql, params = self._build_base_where(
             begin_time,
             end_time,
+            city_id=city_id,
             county_id=county_id,
             snapshot_date=snapshot_date,
             snapshot_start_date=snapshot_start_date,
@@ -426,19 +470,36 @@ class RightPanelRepository:
         self,
         begin_time,
         end_time,
+        city_id=None,
         county_id=None,
         snapshot_date=None,
         snapshot_start_date=None,
         snapshot_end_date=None,
     ):
-        parts = [
-            "ou.`begin_time` >= :begin_time",
-            "ou.`begin_time` <= :end_time",
-        ]
-        params = {
-            "begin_time": begin_time,
-            "end_time": end_time,
-        }
+        parts = []
+        params = {}
+        if begin_time and end_time:
+            parts.append(
+                "(ou.`begin_time` <= :filter_end_time AND "
+                "COALESCE(NULLIF(CAST(ou.`end_time` AS CHAR), ''), "
+                "'9999-12-31 23:59:59') >= :filter_begin_time)"
+            )
+            params["filter_begin_time"] = begin_time
+            params["filter_end_time"] = end_time
+        elif begin_time:
+            parts.append(
+                "COALESCE(NULLIF(CAST(ou.`end_time` AS CHAR), ''), "
+                "'9999-12-31 23:59:59') >= :filter_begin_time"
+            )
+            params["filter_begin_time"] = begin_time
+        elif end_time:
+            parts.append("ou.`begin_time` <= :filter_end_time")
+            params["filter_end_time"] = end_time
+        if not city_id and not county_id:
+            city_id = DEFAULT_WARNING_CITY_ID
+        if city_id:
+            parts.append("ou.rdt_city_id = :city_id")
+            params["city_id"] = city_id
         if county_id:
             parts.append("ou.rdt_county_id = :county_id")
             params["county_id"] = county_id
@@ -474,7 +535,7 @@ class RightPanelRepository:
           MIN(NULLIF(ou.begin_time, '')) AS beginTime,
           MAX(NULLIF(ou.end_time, '')) AS endTime,
           MAX(IFNULL(ou.outage_nature, '')) AS outageNatureCode,
-          CASE WHEN MAX(NULLIF(ou.end_time, '')) IS NULL THEN 0 ELSE 1 END AS isRestored,
+          MIN(CASE WHEN ou.end_time IS NOT NULL AND ou.end_time != '' AND ou.end_time <= :filter_end_time THEN 1 ELSE 0 END) AS isRestored,
           COUNT(DISTINCT NULLIF(ou.cons_no, '')) AS affectedUsers,
           COUNT(DISTINCT NULLIF(ou.equipment_id, '')) AS affectedEquipment,
           COUNT(DISTINCT CASE WHEN ou.is_key_user = 1 THEN NULLIF(ou.cons_no, '') END) AS keyUserCount,
@@ -533,9 +594,9 @@ class RightPanelRepository:
         return {
             "totalEvents": total,
             "natureRatio": [
-                {"name": "计划停电", "code": "planned", "value": planned, "percent": _pct(planned)},
-                {"name": "故障停电", "code": "fault", "value": fault, "percent": _pct(fault)},
-                {"name": "其他", "code": "other", "value": other, "percent": _pct(other)},
+                {"code": "01", "value": planned, "percent": _pct(planned)},
+                {"code": "02", "value": fault, "percent": _pct(fault)},
+                {"code": "03", "value": other, "percent": _pct(other)},
             ],
             "restoredEvents": restored,
             "unrestoredEvents": unrestored,
@@ -603,7 +664,7 @@ class RightPanelRepository:
             "countyName": row.get("countyName", ""),
             "affectedUsers": _to_int(row.get("affectedUsers")),
             "affectedEquipment": _to_int(row.get("affectedEquipment")),
-            "outageNature": _nature_text(nature_code),
+            "outageNature": nature_code or "03",
             "isRestored": is_restored,
             "beginTime": row.get("beginTime") or "",
             "endTime": row.get("endTime") or None,
@@ -620,7 +681,7 @@ class RightPanelRepository:
             "outageNumber": row.get("outageNumber", ""),
             "countyName": row.get("countyName", ""),
             "affectedUsers": _to_int(row.get("affectedUsers")),
-            "outageNature": _nature_text(nature_code),
+            "outageNature": nature_code or "03",
         }
 
     @staticmethod
@@ -644,15 +705,6 @@ def _to_int(value):
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
-
-
-def _nature_text(value):
-    plain = str(value or "").strip()
-    if plain == "01":
-        return "planned"
-    if plain == "02":
-        return "fault"
-    return "other"
 
 
 def _normalize_nature_bucket(value):
