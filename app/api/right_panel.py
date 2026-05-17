@@ -7,7 +7,9 @@ from app.repositories.right_panel_repository import right_panel_repository
 
 right_panel_bp = Blueprint("right_panel", __name__, url_prefix="/right-panel")
 
-_DATETIME_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d")
+_DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
+_DATE_FORMAT = "%Y-%m-%d"
+_DATETIME_FORMATS = (_DATETIME_FORMAT, _DATE_FORMAT)
 
 
 def _json_body():
@@ -18,16 +20,33 @@ def _optional_str(value):
     return str(value or "").strip() or None
 
 
-def _validate_datetime(value, field_name):
+def _parse_datetime(value, field_name, end_of_day=False):
     if value is None:
-        return None, None
+        return None, None, None
+    value = str(value).strip()
     for fmt in _DATETIME_FORMATS:
         try:
-            datetime.strptime(value, fmt)
-            return value, None
+            parsed = datetime.strptime(value, fmt)
+            if fmt == _DATE_FORMAT:
+                if end_of_day:
+                    parsed = parsed.replace(hour=23, minute=59, second=59)
+                else:
+                    parsed = parsed.replace(hour=0, minute=0, second=0)
+            return parsed.strftime(_DATETIME_FORMAT), parsed, None
         except (ValueError, TypeError):
             continue
-    return None, error(f"{field_name} format must be YYYY-MM-DD or YYYY-MM-DD HH:mm:ss", 400)
+    return None, None, error(f"{field_name} format must be YYYY-MM-DD or YYYY-MM-DD HH:mm:ss", 400)
+
+
+def _validate_date(value, field_name):
+    if value in (None, ""):
+        return None, None, None
+    value = str(value).strip()
+    try:
+        parsed = datetime.strptime(value, _DATE_FORMAT)
+        return parsed.strftime(_DATE_FORMAT), parsed, None
+    except (ValueError, TypeError):
+        return None, None, error(f"{field_name} format must be YYYY-MM-DD", 400)
 
 
 def _require_time_range(req_data):
@@ -36,12 +55,14 @@ def _require_time_range(req_data):
     if not begin_time or not end_time:
         return None, None, error("beginTime and endTime are required", 400)
 
-    begin_time, err = _validate_datetime(begin_time, "beginTime")
+    begin_time, begin_dt, err = _parse_datetime(begin_time, "beginTime")
     if err:
         return None, None, err
-    end_time, err = _validate_datetime(end_time, "endTime")
+    end_time, end_dt, err = _parse_datetime(end_time, "endTime", end_of_day=True)
     if err:
         return None, None, err
+    if begin_dt > end_dt:
+        return None, None, error("beginTime must be earlier than or equal to endTime", 400)
 
     return begin_time, end_time, None
 
@@ -62,11 +83,27 @@ def _parse_pagination(req_data):
 
 
 def _snapshot_filters(req_data):
+    snapshot_date, _, err = _validate_date(req_data.get("snapshotDate"), "snapshotDate")
+    if err:
+        return None, err
+    snapshot_start_date, start_dt, err = _validate_date(
+        req_data.get("snapshotStartDate"), "snapshotStartDate"
+    )
+    if err:
+        return None, err
+    snapshot_end_date, end_dt, err = _validate_date(
+        req_data.get("snapshotEndDate"), "snapshotEndDate"
+    )
+    if err:
+        return None, err
+    if start_dt and end_dt and start_dt > end_dt:
+        return None, error("snapshotStartDate must be earlier than or equal to snapshotEndDate", 400)
+
     return {
-        "snapshot_date": req_data.get("snapshotDate"),
-        "snapshot_start_date": req_data.get("snapshotStartDate"),
-        "snapshot_end_date": req_data.get("snapshotEndDate"),
-    }
+        "snapshot_date": snapshot_date,
+        "snapshot_start_date": snapshot_start_date,
+        "snapshot_end_date": snapshot_end_date,
+    }, None
 
 
 @right_panel_bp.route("/county-warnings", methods=["POST"])
@@ -76,12 +113,16 @@ def right_panel_county_warnings():
     if err:
         return err
 
+    snapshot_filters, err = _snapshot_filters(req_data)
+    if err:
+        return err
+
     try:
         data = right_panel_repository.county_outage_status(
             begin_time=begin_time,
             end_time=end_time,
             city_id=_optional_str(req_data.get("cityId")),
-            **_snapshot_filters(req_data),
+            **snapshot_filters,
         )
     except Exception:
         current_app.logger.exception("Failed to query county warnings")
@@ -104,15 +145,20 @@ def right_panel_fault_location():
     if err:
         return err
 
+    snapshot_filters, err = _snapshot_filters(req_data)
+    if err:
+        return err
+
     try:
         data = right_panel_repository.fault_location_summary(
             begin_time=begin_time,
             end_time=end_time,
+            city_id=_optional_str(req_data.get("cityId")),
             county_id=_optional_str(req_data.get("countyId")),
             dimension=_optional_str(req_data.get("dimension")),
             danger_threshold=_parse_int(req_data, "dangerThreshold", 5000),
             warning_threshold=_parse_int(req_data, "warningThreshold", 1000),
-            **_snapshot_filters(req_data),
+            **snapshot_filters,
         )
     except Exception:
         current_app.logger.exception("Failed to query fault location")
@@ -128,16 +174,49 @@ def right_panel_outage_scope():
     if err:
         return err
 
+    snapshot_filters, err = _snapshot_filters(req_data)
+    if err:
+        return err
+
     try:
         data = right_panel_repository.outage_scope(
             begin_time=begin_time,
             end_time=end_time,
+            city_id=_optional_str(req_data.get("cityId")),
             county_id=_optional_str(req_data.get("countyId")),
-            **_snapshot_filters(req_data),
+            **snapshot_filters,
         )
     except Exception:
         current_app.logger.exception("Failed to query outage scope")
         return error("Failed to query outage scope", 500)
+
+    return success(data)
+
+
+@right_panel_bp.route("/outage-events-summary", methods=["POST"])
+def right_panel_outage_events_summary():
+    req_data = _json_body()
+    begin_time, end_time, err = _require_time_range(req_data)
+    if err:
+        return err
+
+    snapshot_filters, err = _snapshot_filters(req_data)
+    if err:
+        return err
+
+    try:
+        data = right_panel_repository.outage_events_summary(
+            begin_time=begin_time,
+            end_time=end_time,
+            city_id=_optional_str(req_data.get("cityId")),
+            county_id=_optional_str(req_data.get("countyId")),
+            keyword=_optional_str(req_data.get("keyword")),
+            outage_nature=_optional_str(req_data.get("outageNature")),
+            **snapshot_filters,
+        )
+    except Exception:
+        current_app.logger.exception("Failed to query right panel outage events summary")
+        return error("Failed to query right panel outage events summary", 500)
 
     return success(data)
 
@@ -153,16 +232,21 @@ def right_panel_outage_events():
     if err:
         return err
 
+    snapshot_filters, err = _snapshot_filters(req_data)
+    if err:
+        return err
+
     try:
-        data = right_panel_repository.outage_events(
+        data = right_panel_repository.outage_events_list(
             begin_time=begin_time,
             end_time=end_time,
+            city_id=_optional_str(req_data.get("cityId")),
             county_id=_optional_str(req_data.get("countyId")),
             keyword=_optional_str(req_data.get("keyword")),
             outage_nature=_optional_str(req_data.get("outageNature")),
             page=page,
             per_page=per_page,
-            **_snapshot_filters(req_data),
+            **snapshot_filters,
         )
     except Exception:
         current_app.logger.exception("Failed to query right panel outage events")
@@ -200,14 +284,19 @@ def right_panel_outage_chains():
     if err:
         return err
 
+    snapshot_filters, err = _snapshot_filters(req_data)
+    if err:
+        return err
+
     try:
         data = right_panel_repository.outage_chains(
             begin_time=begin_time,
             end_time=end_time,
+            city_id=_optional_str(req_data.get("cityId")),
             county_id=_optional_str(req_data.get("countyId")),
             page=page,
             per_page=per_page,
-            **_snapshot_filters(req_data),
+            **snapshot_filters,
         )
     except Exception:
         current_app.logger.exception("Failed to query right panel outage chains")
