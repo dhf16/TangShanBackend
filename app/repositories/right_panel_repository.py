@@ -125,6 +125,122 @@ class RightPanelRepository:
             ),
         }
 
+    def county_outage_status(
+        self,
+        begin_time,
+        end_time,
+        city_id=None,
+        snapshot_date=None,
+        snapshot_start_date=None,
+        snapshot_end_date=None,
+    ):
+        join_parts = [
+            "ou.`begin_time` >= :begin_time",
+            "ou.`begin_time` <= :end_time",
+        ]
+        params = {
+            "begin_time": begin_time,
+            "end_time": end_time,
+        }
+        if snapshot_date:
+            join_parts.append("ou.snapshot_date = :snapshot_date")
+            params["snapshot_date"] = snapshot_date
+        else:
+            if snapshot_start_date:
+                join_parts.append("ou.snapshot_date >= :snapshot_start_date")
+                params["snapshot_start_date"] = snapshot_start_date
+            if snapshot_end_date:
+                join_parts.append("ou.snapshot_date <= :snapshot_end_date")
+                params["snapshot_end_date"] = snapshot_end_date
+
+        join_sql = " AND ".join(join_parts)
+        warning_city_id = city_id or DEFAULT_WARNING_CITY_ID
+
+        rows = self._fetch_all(
+            f"""
+            SELECT
+              c.county_name AS countyName,
+              CASE WHEN COUNT(ou.id) > 0 THEN 1 ELSE 0 END AS hasOutage
+            FROM county c
+            LEFT JOIN `{self.user_score_table}` ou
+              ON c.county_id = ou.rdt_county_id
+              AND {join_sql}
+            WHERE c.city_id = :warning_city_id
+            GROUP BY c.county_id, c.county_name, c.id
+            ORDER BY c.id
+            """,
+            {**params, "warning_city_id": warning_city_id},
+        )
+        return [
+            {
+                "countyName": row.get("countyName", ""),
+                "hasOutage": bool(row.get("hasOutage")),
+            }
+            for row in rows
+        ]
+
+    def fault_location_summary(
+        self,
+        begin_time,
+        end_time,
+        county_id=None,
+        dimension="feeder",
+        danger_threshold=5000,
+        warning_threshold=1000,
+        snapshot_date=None,
+        snapshot_start_date=None,
+        snapshot_end_date=None,
+    ):
+        where_sql, params = self._build_base_where(
+            begin_time,
+            end_time,
+            county_id=county_id,
+            snapshot_date=snapshot_date,
+            snapshot_start_date=snapshot_start_date,
+            snapshot_end_date=snapshot_end_date,
+        )
+        id_expr, name_expr = self._entity_exprs(dimension)
+        params["danger_threshold"] = danger_threshold
+        params["warning_threshold"] = warning_threshold
+
+        row = self._fetch_one(
+            f"""
+            SELECT
+              COUNT(*) AS total,
+              SUM(CASE WHEN affectedUsers > :danger_threshold THEN 1 ELSE 0 END) AS danger,
+              SUM(CASE WHEN affectedUsers >= :warning_threshold AND affectedUsers <= :danger_threshold THEN 1 ELSE 0 END) AS warning,
+              SUM(CASE WHEN affectedUsers < :warning_threshold THEN 1 ELSE 0 END) AS safe
+            FROM (
+              SELECT
+                {id_expr} AS entityId,
+                {name_expr} AS entityName,
+                COUNT(DISTINCT NULLIF(ou.cons_no, '')) AS affectedUsers
+              {self._joined_from_sql()}
+              {where_sql}
+                AND {id_expr} IS NOT NULL
+                AND {id_expr} <> ''
+              GROUP BY {id_expr}, {name_expr}
+            ) t
+            """,
+            params,
+        )
+        matched_events = self.fault_event_match_count(
+            begin_time=begin_time,
+            end_time=end_time,
+            county_id=county_id,
+            dimension=dimension,
+            snapshot_date=snapshot_date,
+            snapshot_start_date=snapshot_start_date,
+            snapshot_end_date=snapshot_end_date,
+        )
+        return {
+            "total": _to_int(row.get("total")),
+            "matchedEvents": _to_int(matched_events),
+            "danger": _to_int(row.get("danger")),
+            "warning": _to_int(row.get("warning")),
+            "safe": _to_int(row.get("safe")),
+        }
+
     def county_warnings(
         self,
         begin_time,
@@ -259,6 +375,45 @@ class RightPanelRepository:
                 "feeder": feeder_summary,
                 "substation": substation_summary,
             },
+        }
+
+    def outage_scope(
+        self,
+        begin_time,
+        end_time,
+        county_id=None,
+        snapshot_date=None,
+        snapshot_start_date=None,
+        snapshot_end_date=None,
+    ):
+        where_sql, params = self._build_base_where(
+            begin_time,
+            end_time,
+            county_id=county_id,
+            snapshot_date=snapshot_date,
+            snapshot_start_date=snapshot_start_date,
+            snapshot_end_date=snapshot_end_date,
+        )
+        event_sql = self._event_summary_sql(where_sql)
+        row = self._fetch_one(
+            f"""
+            SELECT
+              SUM(CASE WHEN e.isRestored = 1 THEN 1 ELSE 0 END) AS restoredEvents,
+              SUM(CASE WHEN e.isRestored = 0 THEN 1 ELSE 0 END) AS unrestoredEvents,
+              SUM(e.affectedEquipment) AS affectedEquipment,
+              SUM(e.affectedUsers) AS affectedUsers
+            FROM ({event_sql}) e
+            """,
+            params,
+        )
+        restored = _to_int(row.get("restoredEvents"))
+        unrestored = _to_int(row.get("unrestoredEvents"))
+        return {
+            "totalEvents": restored + unrestored,
+            "restoredEvents": restored,
+            "unrestoredEvents": unrestored,
+            "affectedEquipment": _to_int(row.get("affectedEquipment")),
+            "affectedUsers": _to_int(row.get("affectedUsers")),
         }
 
     def outage_scope_summary(
