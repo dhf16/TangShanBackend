@@ -226,20 +226,32 @@ class RightPanelRepository:
             SELECT
               SUM(CASE WHEN e.isRestored = 1 THEN 1 ELSE 0 END) AS restoredEvents,
               SUM(CASE WHEN e.isRestored = 0 THEN 1 ELSE 0 END) AS unrestoredEvents,
-              SUM(e.affectedEquipment) AS affectedEquipment,
-              SUM(e.affectedUsers) AS affectedUsers
+              SUM(e.affectedUsers) AS affectedUsersSum,
+              SUM(e.affectedEquipment) AS affectedEquipmentSum
             FROM ({event_sql}) e
             """,
             params,
         )
         restored = _to_int(row.get("restoredEvents"))
         unrestored = _to_int(row.get("unrestoredEvents"))
+
+        event_key = self._event_key_expr()
+        stats = self._fetch_one(
+            f"""
+            SELECT
+              COUNT(DISTINCT NULLIF(ou.cons_no, '')) AS affectedUsers,
+              COUNT(DISTINCT NULLIF(ou.equipment_id, '')) AS affectedEquipment
+            {self._joined_from_sql()}
+            {where_sql}
+            """,
+            params,
+        )
         return {
             "totalEvents": restored + unrestored,
             "restoredEvents": restored,
             "unrestoredEvents": unrestored,
-            "affectedEquipment": _to_int(row.get("affectedEquipment")),
-            "affectedUsers": _to_int(row.get("affectedUsers")),
+            "affectedEquipment": _to_int(stats.get("affectedEquipment")),
+            "affectedUsers": _to_int(stats.get("affectedUsers")),
         }
 
     def outage_events_summary(
