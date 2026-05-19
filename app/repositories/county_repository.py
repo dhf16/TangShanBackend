@@ -525,6 +525,7 @@ class CountyRepository:
         SELECT
           IFNULL(equipment_id, '') AS equipmentId,
           IFNULL(MAX(equipment_name), '') AS equipmentName,
+          IFNULL(MAX(equipment_type), '') AS equipmentType,
           COUNT(DISTINCT CASE WHEN is_key_user = 1 THEN cons_no END) AS keyUsers,
           COUNT(DISTINCT CASE WHEN is_sensitive_user = 1 THEN cons_no END) AS sensitiveUsers,
           COUNT(DISTINCT outage_number) AS outageCount

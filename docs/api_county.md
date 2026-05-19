@@ -918,6 +918,7 @@ POST /api/county/equipment-list
 | data.list | array | 设备影响列表，按 keyUsers 降序、outageCount 降序 |
 | data.list[].equipmentId | string | 设备编号 |
 | data.list[].equipmentName | string | 设备名称 |
+| data.list[].equipmentType | string | 设备类型 |
 | data.list[].keyUsers | int | 该设备影响的重点用户数量（去重） |
 | data.list[].sensitiveUsers | int | 该设备影响的敏感用户数量（去重） |
 | data.list[].outageCount | int | 该设备关联的停电事件数量（去重） |
