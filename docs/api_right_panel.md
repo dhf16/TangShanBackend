@@ -381,13 +381,13 @@ POST /api/right-panel/outage-events
 }
 ```
 
-## 八、停电事件详情（二级页面-详情）
+## 八、停电事件详情 - 馈线（二级页面-详情）
 
 ```http
-POST /api/right-panel/outage-event-detail
+POST /api/right-panel/outage-event-detail/feeder
 ```
 
-根据停电事件编号查询单个事件完整详情。
+根据停电事件编号查询单个事件详情，返回馈线维度信息。
 
 请求参数：
 
@@ -412,23 +412,110 @@ POST /api/right-panel/outage-event-detail
 | affectedUsers | int | 影响用户数 |
 | affectedEquipment | int | 影响设备数 |
 | outageNature | string | 停电性质原始编码：`01`（计划）、`02`（故障）、`03`（其他） |
-| isRestored | bool | 是否已复电，取 `outage_flag` 官方标记，全部用户复电才算 `true` |
+| isRestored | bool | 是否已复电 |
 | beginTime | string | 停电开始时间 |
 | endTime | string | 停电结束时间，未复电时为 `null` |
-| feederNames | array | 匹配到的馈线名称列表 |
-| substationName | string | 变电站名称 |
+| feederId | string / array | 馈线 ID，单条为字符串，多条为数组 |
+| feederName | string / array | 馈线名称，单条为字符串，多条为数组 |
 | equipmentNames | array | 涉及设备名称列表 |
 | keyUserCount | int | 重要用户数 |
 | sensitiveUserCount | int | 敏感用户数 |
 | normalUserCount | int | 普通用户数 |
 | matchStatus | string | `equipment_feeder_matched` 或 `equipment_only` |
 
-`matchStatus` 说明：
+返回示例：
 
-| 值 | 说明 |
-| --- | --- |
-| equipment_feeder_matched | 已通过 `equipment_id -> equipment_feeder -> feeder` 匹配到馈线 |
-| equipment_only | 只能从 `outage_user_full` 拿到设备信息，未匹配到馈线 |
+```json
+{
+  "code": 0,
+  "success": true,
+  "data": {
+    "outageNumber": "MID20250430001209",
+    "countyName": "滦州市供电公司",
+    "affectedUsers": 1021,
+    "affectedEquipment": 11,
+    "outageNature": "02",
+    "isRestored": true,
+    "beginTime": "2025-04-30 22:37:10",
+    "endTime": "2025-04-30 23:59:59",
+    "feederId": "01DKX-8523",
+    "feederName": "10kV511晒变茨榆坨",
+    "equipmentNames": ["大马庄2台区", "赵各庄二台区"],
+    "keyUserCount": 87,
+    "sensitiveUserCount": 3,
+    "normalUserCount": 934,
+    "matchStatus": "equipment_feeder_matched"
+  }
+}
+```
+
+## 八-B、停电事件详情 - 变电站（二级页面-详情）
+
+```http
+POST /api/right-panel/outage-event-detail/substation
+```
+
+根据停电事件编号查询单个事件详情，返回变电站维度信息。
+
+请求参数：
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| outageNumber | string | 是 | 停电事件编号，来自事件列表的 `outageNumber` |
+
+请求示例：
+
+```json
+{
+  "outageNumber": "CMS20250630040514"
+}
+```
+
+返回 `data` 主要字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| outageNumber | string | 停电事件编号 |
+| countyName | string | 区县名称 |
+| affectedUsers | int | 影响用户数 |
+| affectedEquipment | int | 影响设备数 |
+| outageNature | string | 停电性质原始编码：`01`（计划）、`02`（故障）、`03`（其他） |
+| isRestored | bool | 是否已复电 |
+| beginTime | string | 停电开始时间 |
+| endTime | string | 停电结束时间，未复电时为 `null` |
+| substationId | string / array | 变电站 ID，单条为字符串，多条为数组 |
+| substationName | string / array | 变电站名称，单条为字符串，多条为数组 |
+| equipmentNames | array | 涉及设备名称列表 |
+| keyUserCount | int | 重要用户数 |
+| sensitiveUserCount | int | 敏感用户数 |
+| normalUserCount | int | 普通用户数 |
+| matchStatus | string | `equipment_feeder_matched` 或 `equipment_only` |
+
+返回示例：
+
+```json
+{
+  "code": 0,
+  "success": true,
+  "data": {
+    "outageNumber": "MID20250430001209",
+    "countyName": "滦州市供电公司",
+    "affectedUsers": 1021,
+    "affectedEquipment": 11,
+    "outageNature": "02",
+    "isRestored": true,
+    "beginTime": "2025-04-30 22:37:10",
+    "endTime": "2025-04-30 23:59:59",
+    "substationId": "D6B1B60A-7F23-7380-E043-0A76041F7380-94263",
+    "substationName": "晒甲坨变电站",
+    "equipmentNames": ["大马庄2台区", "赵各庄二台区"],
+    "keyUserCount": 87,
+    "sensitiveUserCount": 3,
+    "normalUserCount": 934,
+    "matchStatus": "equipment_feeder_matched"
+  }
+}
+```
 
 ## 九、停电链路列表（模块三二级页面）
 
@@ -509,8 +596,11 @@ POST /api/right-panel/outage-chains
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| outageNumber | string | 停电事件编号，点击"详情"时传给 `/outage-event-detail` |
-| feederName | string | 链路名称（馈线） |
+| outageNumber | string | 停电事件编号，点击"详情"时传给 `/outage-event-detail/feeder` 或 `/outage-event-detail/substation` |
+| feederId | string / array | 馈线 ID，单条为字符串，多条为数组 |
+| feederName | string / array | 馈线名称，单条为字符串，多条为数组 |
+| substationId | string / array | 变电站 ID，单条为字符串，多条为数组 |
+| substationName | string / array | 变电站名称，单条为字符串，多条为数组 |
 | importantUserCount | int | 重要用户数量 |
 | importantUsers | array | 重要用户名称列表 |
 | sensitiveUserCount | int | 敏感用户数量 |
@@ -532,7 +622,10 @@ POST /api/right-panel/outage-chains
     "list": [
       {
         "outageNumber": "CMS20250630040514",
-        "feederName": "10kV路北区示范线01",
+        "feederId": "01DKX-8523",
+        "feederName": "10kV511晒变茨榆坨",
+        "substationId": "D6B1B60A-7F23-7380-E043-0A76041F7380-94263",
+        "substationName": "晒甲坨变电站",
         "importantUserCount": 1,
         "importantUsers": ["路北区张伟"],
         "sensitiveUserCount": 4,
@@ -553,7 +646,8 @@ POST /api/right-panel/outage-chains
 | `POST /right-panel/outage-scope` | 停电范围统计 | 模块三 一级页面 |
 | `POST /right-panel/outage-events-summary` | 饼图 + 复电进度条 | 模块二 二级页面 |
 | `POST /right-panel/outage-events` | 事件列表（分页） | 模块二 二级页面 |
-| `POST /right-panel/outage-event-detail` | 单条事件详情 | 二级页面-详情 |
+| `POST /right-panel/outage-event-detail/feeder` | 单条事件详情（馈线维度） | 二级页面-详情 |
+| `POST /right-panel/outage-event-detail/substation` | 单条事件详情（变电站维度） | 二级页面-详情 |
 | `POST /right-panel/outage-chains` | 链路卡片列表 | 模块三 二级页面 |
 
 ## 十一、Apifox 测试建议
@@ -576,7 +670,8 @@ POST /api/right-panel/outage-chains
 5. `POST /api/right-panel/outage-events-summary`
 6. `POST /api/right-panel/outage-events`
 7. `POST /api/right-panel/outage-chains`
-8. `POST /api/right-panel/outage-event-detail`（从 outage-events 返回的 list 里取 outageNumber）
+8. `POST /api/right-panel/outage-event-detail/feeder`（从 outage-events 返回的 list 里取 outageNumber）
+9. `POST /api/right-panel/outage-event-detail/substation`（同上）
 
 ## 十二、注意事项
 

@@ -255,18 +255,36 @@ def right_panel_outage_events():
     return success(data)
 
 
-@right_panel_bp.route("/outage-event-detail", methods=["POST"])
-def right_panel_outage_event_detail():
+@right_panel_bp.route("/outage-event-detail/feeder", methods=["POST"])
+def right_panel_outage_event_detail_feeder():
     req_data = _json_body()
     outage_number = _optional_str(req_data.get("outageNumber"))
     if not outage_number:
         return error("outageNumber is required", 400)
 
     try:
-        data = right_panel_repository.outage_event_detail(outage_number)
+        data = right_panel_repository.outage_event_detail_feeder(outage_number)
     except Exception:
-        current_app.logger.exception("Failed to query right panel outage event detail")
-        return error("Failed to query right panel outage event detail", 500)
+        current_app.logger.exception("Failed to query right panel outage event detail feeder")
+        return error("Failed to query right panel outage event detail feeder", 500)
+
+    if not data:
+        return error("Outage event not found", 404)
+    return success(data)
+
+
+@right_panel_bp.route("/outage-event-detail/substation", methods=["POST"])
+def right_panel_outage_event_detail_substation():
+    req_data = _json_body()
+    outage_number = _optional_str(req_data.get("outageNumber"))
+    if not outage_number:
+        return error("outageNumber is required", 400)
+
+    try:
+        data = right_panel_repository.outage_event_detail_substation(outage_number)
+    except Exception:
+        current_app.logger.exception("Failed to query right panel outage event detail substation")
+        return error("Failed to query right panel outage event detail substation", 500)
 
     if not data:
         return error("Outage event not found", 404)
