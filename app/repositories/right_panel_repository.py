@@ -364,7 +364,7 @@ class RightPanelRepository:
         )
         return _to_int(row.get("total"))
 
-    def outage_event_detail(self, outage_number):
+    def outage_event_detail_feeder(self, outage_number):
         where_sql = """
         WHERE (
           ou.outage_number = :outage_number
@@ -380,7 +380,38 @@ class RightPanelRepository:
             return {}
 
         detail = self._format_event_row(row)
+        feeder_ids = [x for x in (row.get("feederIdsText") or "").split("|") if x]
+        feeder_names = [x for x in (row.get("feederNamesText") or "").split("|") if x]
         detail.update({
+            "feederId": feeder_ids[0] if len(feeder_ids) == 1 else feeder_ids,
+            "feederName": feeder_names[0] if len(feeder_names) == 1 else feeder_names,
+            "keyUserCount": _to_int(row.get("keyUserCount")),
+            "sensitiveUserCount": _to_int(row.get("sensitiveUserCount")),
+            "normalUserCount": _to_int(row.get("normalUserCount")),
+        })
+        return detail
+
+    def outage_event_detail_substation(self, outage_number):
+        where_sql = """
+        WHERE (
+          ou.outage_number = :outage_number
+          OR ou.record_key = :outage_number
+        )
+        """
+        event_sql = self._event_summary_sql(where_sql)
+        row = self._fetch_one(
+            f"SELECT * FROM ({event_sql}) e LIMIT 1",
+            {"outage_number": outage_number, "filter_end_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
+        )
+        if not row:
+            return {}
+
+        detail = self._format_event_row(row)
+        substation_ids = [x for x in (row.get("substationIdsText") or "").split("|") if x]
+        substation_names = [x for x in (row.get("substationNamesText") or "").split("|") if x]
+        detail.update({
+            "substationId": substation_ids[0] if len(substation_ids) == 1 else substation_ids,
+            "substationName": substation_names[0] if len(substation_names) == 1 else substation_names,
             "keyUserCount": _to_int(row.get("keyUserCount")),
             "sensitiveUserCount": _to_int(row.get("sensitiveUserCount")),
             "normalUserCount": _to_int(row.get("normalUserCount")),
@@ -562,6 +593,8 @@ class RightPanelRepository:
           GROUP_CONCAT(DISTINCT NULLIF(f.feeder_name, '') ORDER BY f.feeder_name SEPARATOR '|') AS feederNamesText,
           MAX(IFNULL(s.subs_id, '')) AS substationId,
           MAX(IFNULL(s.subs_name, '')) AS substationName,
+          GROUP_CONCAT(DISTINCT NULLIF(s.subs_id, '') ORDER BY s.subs_id SEPARATOR '|') AS substationIdsText,
+          GROUP_CONCAT(DISTINCT NULLIF(s.subs_name, '') ORDER BY s.subs_name SEPARATOR '|') AS substationNamesText,
           MAX(COALESCE(ou.rdt_maint_group_id, '')) AS maintGroupId,
           MAX(COALESCE(ou.rdt_maint_group_name, '')) AS maintGroupName,
           MAX(COALESCE(NULLIF(ou.equipment_name, ''), '')) AS equipmentName,
@@ -681,8 +714,6 @@ class RightPanelRepository:
             "isRestored": is_restored,
             "beginTime": row.get("beginTime") or "",
             "endTime": row.get("endTime") or None,
-            "feederNames": feeder_names,
-            "substationName": row.get("substationName", ""),
             "equipmentNames": equipment_names,
             "matchStatus": match_status,
         }
