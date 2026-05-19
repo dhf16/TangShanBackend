@@ -226,20 +226,32 @@ class RightPanelRepository:
             SELECT
               SUM(CASE WHEN e.isRestored = 1 THEN 1 ELSE 0 END) AS restoredEvents,
               SUM(CASE WHEN e.isRestored = 0 THEN 1 ELSE 0 END) AS unrestoredEvents,
-              SUM(e.affectedEquipment) AS affectedEquipment,
-              SUM(e.affectedUsers) AS affectedUsers
+              SUM(e.affectedUsers) AS affectedUsersSum,
+              SUM(e.affectedEquipment) AS affectedEquipmentSum
             FROM ({event_sql}) e
             """,
             params,
         )
         restored = _to_int(row.get("restoredEvents"))
         unrestored = _to_int(row.get("unrestoredEvents"))
+
+        event_key = self._event_key_expr()
+        stats = self._fetch_one(
+            f"""
+            SELECT
+              COUNT(DISTINCT NULLIF(ou.cons_no, '')) AS affectedUsers,
+              COUNT(DISTINCT NULLIF(ou.equipment_id, '')) AS affectedEquipment
+            {self._joined_from_sql()}
+            {where_sql}
+            """,
+            params,
+        )
         return {
             "totalEvents": restored + unrestored,
             "restoredEvents": restored,
             "unrestoredEvents": unrestored,
-            "affectedEquipment": _to_int(row.get("affectedEquipment")),
-            "affectedUsers": _to_int(row.get("affectedUsers")),
+            "affectedEquipment": _to_int(stats.get("affectedEquipment")),
+            "affectedUsers": _to_int(stats.get("affectedUsers")),
         }
 
     def outage_events_summary(
@@ -428,10 +440,10 @@ class RightPanelRepository:
               pk.outageNumber,
               MAX(COALESCE(c.county_name, ou.rdt_county_name, '')) AS countyName,
               pk.beginTime,
-              MAX(IFNULL(f.feeder_name, '')) AS feederName,
               GROUP_CONCAT(DISTINCT NULLIF(f.feeder_id, '') ORDER BY f.feeder_id SEPARATOR '|') AS feederIdsText,
               GROUP_CONCAT(DISTINCT NULLIF(f.feeder_name, '') ORDER BY f.feeder_name SEPARATOR '|') AS feederNamesText,
-              MAX(IFNULL(s.subs_name, '')) AS substationName,
+              GROUP_CONCAT(DISTINCT NULLIF(s.subs_id, '') ORDER BY s.subs_id SEPARATOR '|') AS substationIdsText,
+              GROUP_CONCAT(DISTINCT NULLIF(s.subs_name, '') ORDER BY s.subs_name SEPARATOR '|') AS substationNamesText,
               MAX(COALESCE(ou.rdt_maint_group_name, '')) AS maintGroupName,
               GROUP_CONCAT(DISTINCT NULLIF(ou.equipment_id, '') ORDER BY ou.equipment_id SEPARATOR '|') AS equipmentIdsText,
               GROUP_CONCAT(DISTINCT NULLIF(ou.equipment_name, '') ORDER BY ou.equipment_name SEPARATOR '|') AS equipmentNamesText,
@@ -690,9 +702,16 @@ class RightPanelRepository:
         important_users = _split_user_text(row.get("importantUserText"))
         sensitive_users = _split_user_text(row.get("sensitiveUserText"))
         outage_number = row.get("outageNumber", "")
+        feeder_ids = [x for x in (row.get("feederIdsText") or "").split("|") if x]
+        feeder_names = [x for x in (row.get("feederNamesText") or "").split("|") if x]
+        substation_ids = [x for x in (row.get("substationIdsText") or "").split("|") if x]
+        substation_names = [x for x in (row.get("substationNamesText") or "").split("|") if x]
         return {
             "outageNumber": outage_number,
-            "feederName": row.get("feederName") or "-",
+            "feederId": feeder_ids[0] if len(feeder_ids) == 1 else feeder_ids,
+            "feederName": feeder_names[0] if len(feeder_names) == 1 else feeder_names,
+            "substationId": substation_ids[0] if len(substation_ids) == 1 else substation_ids,
+            "substationName": substation_names[0] if len(substation_names) == 1 else substation_names,
             "importantUserCount": len(important_users),
             "importantUsers": important_users,
             "sensitiveUserCount": len(sensitive_users),
