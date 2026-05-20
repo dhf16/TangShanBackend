@@ -331,12 +331,20 @@ class CountyRepository:
         per_page,
         rdt_county_id=None,
         city_id=None,
+        user_level=None,
         keyword=None,
         outage_count_filter=None,
         begin_time=None,
         end_time=None,
     ):
         where_parts, params = self._time_filters(begin_time, end_time)
+
+        if user_level == "sensitive":
+            where_parts.append("is_sensitive_user = 1")
+        elif user_level == "key":
+            where_parts.append("is_key_user = 1")
+        elif user_level == "key_sensitive":
+            where_parts.append("(is_key_user = 1 OR is_sensitive_user = 1)")
 
         if rdt_county_id:
             where_parts.append("rdt_county_id = :rdt_county_id")

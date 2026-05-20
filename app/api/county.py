@@ -328,6 +328,12 @@ def county_user_outage_stats():
     else:
         outage_count = None
 
+    user_level = req_data.get("userLevel")
+    if user_level not in (None, "", "all", "key", "sensitive", "key_sensitive"):
+        return error("userLevel must be one of all/key/sensitive/key_sensitive", 400)
+    if user_level == "all" or not user_level:
+        user_level = None
+
     county_id = _optional_str(req_data.get("countyId"))
     city_id = _optional_str(req_data.get("cityId"))
     if county_id and city_id:
@@ -343,6 +349,7 @@ def county_user_outage_stats():
             per_page=per_page,
             rdt_county_id=county_id,
             city_id=city_id,
+            user_level=user_level,
             keyword=_optional_str(req_data.get("keyword")),
             outage_count_filter=outage_count,
             begin_time=begin_time,

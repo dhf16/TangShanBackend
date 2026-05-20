@@ -505,6 +505,7 @@ POST /api/county/user-outage-stats
 | cityId | string | 否 | 城市 ID，传入则只查该城市下的用户。与 countyId 互斥 |
 | countyId | string | 否 | 区县 ID，不传则查全部区县。与 cityId 互斥 |
 | keyword | string | 否 | 搜索关键词，匹配用户名称、用户编号 |
+| userLevel | string | 否 | 用户等级筛选，可选值：`all`、`key`、`sensitive`、`key_sensitive`（重点+敏感用户）。不传或传 `all` 表示不筛选 |
 | outageCount | string | 否 | 停电次数筛选，可选值：`1`、`2`、`3+`（3次及以上）。不传表示不按停电次数筛选 |
 | page | int | 否 | 页码，默认 1，最小 1 |
 | perPage | int | 否 | 每页条数，默认 20，范围 1-500 |
